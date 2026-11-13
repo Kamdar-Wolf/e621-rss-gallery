@@ -32,7 +32,7 @@ export interface FlushResult {
 let dbPromise:Promise<IDBDatabase>|null=null;
 function openDB():Promise<IDBDatabase>{
   if(!dbPromise){
-    dbPromise=new Promise((resolve,reject)=>{
+    dbPromise=new Promise<IDBDatabase>((resolve,reject)=>{
       if(typeof indexedDB==="undefined"){
         reject(new Error("IndexedDB není v tomto prohlížeči k dispozici"));return;
       }
@@ -55,7 +55,7 @@ function openDB():Promise<IDBDatabase>{
       req.onblocked=()=>reject(new Error("Databázi blokuje jiná otevřená karta"));
     }).catch(error=>{dbPromise=null;throw error;});
   }
-  return dbPromise;
+  return dbPromise!;
 }
 function finished(tx:IDBTransaction):Promise<void>{
   return new Promise((resolve,reject)=>{
