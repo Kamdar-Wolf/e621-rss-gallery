@@ -1,0 +1,42 @@
+name: Publish e621 RSS with image previews
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Get project files
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check generator logic
+        run: python build_feed.py --self-test
+      - name: Convert official e621 Atom to RSS
+        run: python build_feed.py
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload RSS page
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: public
+      - name: Publish RSS
+        id: deployment
+        uses: actions/deploy-pages@v4
