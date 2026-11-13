@@ -1,0 +1,12 @@
+# Secrets and local state
+.env
+.env.*
+!.env.example
+**/node_modules/
+**/dist/
+**/.vite/
+**/coverage/
+*.log
+.DS_Store
+.vscode/
+.idea/
