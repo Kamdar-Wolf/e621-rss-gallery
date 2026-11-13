@@ -29,12 +29,19 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Restore cached image previews
+        uses: actions/cache@v4
+        with:
+          path: public/thumbs
+          key: e621-thumbnails-${{ github.run_id }}
+          restore-keys: |
+            e621-thumbnails-
       - name: Check generator logic
         run: python build_feed.py --self-test
       - name: Convert official e621 Atom to RSS
         run: python build_feed.py
-      - name: Diagnose e621 image URLs
-        run: python probe_images.py
+      - name: Download and attach local previews
+        run: python cache_previews.py
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
       - name: Upload RSS page
