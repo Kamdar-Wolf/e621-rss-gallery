@@ -33,6 +33,8 @@ jobs:
         run: python build_feed.py --self-test
       - name: Convert official e621 Atom to RSS
         run: python build_feed.py
+      - name: Diagnose e621 image URLs
+        run: python probe_images.py
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
       - name: Upload RSS page
