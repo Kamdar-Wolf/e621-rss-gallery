@@ -49,6 +49,10 @@ jobs:
         run: npm run test:integration
       - name: Web client build
         run: npm run build:web
+      - name: Verify offline shell artifact
+        run: |
+          test -f dist-web/sw.js
+          grep -q 'kr-app-shell-v1' dist-web/sw.js
       - name: Archive built web client
         uses: actions/upload-artifact@v4
         with:

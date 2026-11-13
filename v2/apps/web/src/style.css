@@ -144,3 +144,27 @@ a{text-decoration:none;color:inherit}
 @media(max-width:890px){.shell{display:block}.sidebar{position:fixed;left:0;top:0;bottom:0;width:min(280px,84vw);transform:translateX(-105%);transition:transform .2s}.sidebar.open{transform:translateX(0)}.nav-mask{display:block;position:fixed;inset:0;border:0;background:#030915b8;z-index:20}.mobile-menu,.side-close{display:block;background:none;border:0;color:var(--text);font-size:22px}.side-close{margin-left:auto}.topbar{height:68px}.grid.gallery{grid-template-columns:repeat(auto-fill,minmax(175px,1fr))}}
 @media(max-width:600px){.topbar{padding:0 12px;gap:7px}.search-field{padding:0 8px;height:40px}.search-field input{font-size:11px}.topbar-actions{gap:2px}.topbar-actions .compact{padding:10px}.topbar-actions .compact span{display:none}.page{padding:23px 12px 65px}.page-header h1{font-size:25px}.page-header .subtle{display:none}.toolbar{gap:8px}.layouts button{padding:8px 10px}.layouts button span{display:none}.selectors{gap:4px}.selectors select{font-size:11px;max-width:115px}.result-heading span:last-child{display:none}.grid.gallery{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.tile-image{height:157px}.tile-text{padding:9px}.tile h3{font-size:12px}.tile time{font-size:9px}.reader-scroll{padding:25px 20px 50px}.login-card{padding:25px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important}}
+
+/* The local queue is visible even when the server is unreachable. */
+.offline-status{
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  padding:11px 14px;margin:0 0 17px;color:var(--muted);font-size:12px
+}
+.offline-status span{font-weight:750;color:#65d2a9}
+.offline-status.is-offline span{color:var(--warn)}
+.offline-status strong{font-weight:750;color:var(--text)}
+.offline-status button,.offline-conflicts button{
+  border:1px solid var(--line);background:var(--card);color:var(--text);
+  padding:7px 10px;border-radius:8px;font-size:11px
+}
+.offline-status button:hover,.offline-conflicts button:hover{background:var(--highlight)}
+.offline-conflict{color:var(--error)!important}
+.offline-conflicts{border:1px solid var(--error);border-radius:12px;padding:15px;margin:12px 0 18px}
+.offline-conflicts h2{font-size:15px;margin:0 0 10px}
+.offline-conflicts>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0}
+.offline-conflicts>div span{flex:1;min-width:140px;font-size:12px}
+@media(max-width:600px){
+  .offline-status{gap:8px;padding:10px}
+  .offline-status button{flex:1}
+}

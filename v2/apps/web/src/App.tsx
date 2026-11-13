@@ -1,5 +1,7 @@
 import {useCallback,useEffect,useMemo,useRef,useState, type ChangeEvent, type FormEvent} from "react";
-import {api,type AuthSession,type SyncPage,type SyncState,type Feed,type Entry,type EntryPage,type Cursor,type Stats} from "./api.js";
+import {api,ApiError,type AuthSession,type SyncPage,type Feed,type Entry,type EntryPage,type Cursor,type Stats} from "./api.js";
+import {cacheSnapshot,clearOfflineUser,flushChanges,getChanges,getSnapshot,overlayChanges,
+  queueChange,resolveConflict,type QueuedChange,type OfflineField,type RemoteState} from "./offline.js";
 
 type FolderView="all"|"unread"|"starred"|"saved";
 type Layout="gallery"|"cards"|"list";
@@ -46,6 +48,11 @@ export function App(){
   const [usernameInput,setUsernameInput]=useState("owner");
   const [passwordInput,setPasswordInput]=useState("");
   const [sessionUser,setSessionUser]=useState("");
+  const [userId,setUserId]=useState("");
+  const currentUser=useRef("");
+  const flushing=useRef(false);
+  const [offline,setOffline]=useState(false);
+  const [queueItems,setQueueItems]=useState<QueuedChange[]>([]);
   const [token,setToken]=useState("");
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState("");
@@ -75,29 +82,75 @@ export function App(){
   });
   const opmlInput=useRef<HTMLInputElement>(null);
   const [opmlBusy,setOpmlBusy]=useState(false);
+  const pendingCount=queueItems.filter(item=>item.status==="pending").length;
+  const conflictCount=queueItems.filter(item=>item.status==="conflict").length;
+  const refreshQueue=useCallback(async(user:string)=>{
+    if(user && currentUser.current===user)
+      setQueueItems(await getChanges(user));
+  },[]);
 
   const load=useCallback(async (auth:string,selected:string,loadMore=false,next:Cursor|null=null)=>{
+    const user=currentUser.current;
+    if(!user)return;
     setError("");setLoading(true);
     try{
       const query=new URLSearchParams({limit:"100"});
       if(selected)query.set("feedId",selected);
       if(loadMore&&next){query.set("before",next.before);query.set("beforeId",next.beforeId);}
+      const page=await api<EntryPage>(auth,"/v1/entries?"+query);
+      if(currentUser.current!==user)return;
+      const queue=await getChanges(user);
+      const items=overlayChanges(page.items,queue);
       if(loadMore){
-        const page=await api<EntryPage>(auth,"/v1/entries?"+query);
-        setEntries(previous=>[...previous,...page.items]);setCursor(page.nextCursor);
+        setEntries(previous=>[...previous,...items]);setCursor(page.nextCursor);
       }else{
-        const [sources,page,summary]=await Promise.all([
+        const [sources,summary]=await Promise.all([
           api<{items:Feed[]}>(auth,"/v1/feeds"),
-          api<EntryPage>(auth,"/v1/entries?"+query),
           api<Stats>(auth,"/v1/stats")
         ]);
-        setFeeds(sources.items);setEntries(page.items);setCursor(page.nextCursor);setStats(summary);
+        if(currentUser.current!==user)return;
+        setFeeds(sources.items);setEntries(items);setCursor(page.nextCursor);
+        setStats(summary);
+        // Cache server data only. Pending user edits remain in the separate queue.
+        void cacheSnapshot(user,sources.items,page.items,summary)
+          .catch(()=>setNotice("Offline úložiště není dostupné; data zůstávají jen v této kartě."));
       }
-    }catch(e){setError(e instanceof Error?e.message:"Neznámá chyba");}
-    finally{setLoading(false);}
+      setOffline(false);
+      setQueueItems(queue);
+    }catch(e){
+      // A network failure is not an empty feed. Restore a previous snapshot.
+      if(e instanceof ApiError && e.status===401){
+        setError("Relace vypršela. Přihlas se znovu.");return;
+      }
+      if(e instanceof ApiError && e.status!==0){
+        setError(e.message);return;
+      }
+      try{
+        const snapshot=await getSnapshot(user);
+        if(currentUser.current!==user)return;
+        if(snapshot){
+          const queue=await getChanges(user);
+          setQueueItems(queue);
+          if(!loadMore){
+            setFeeds(snapshot.feeds);
+            setEntries(overlayChanges(
+              snapshot.entries.filter(entry=>!selected||entry.feed_id===selected),queue));
+            setStats(snapshot.stats);
+            setCursor(null);
+          }
+          setOffline(true);
+          setNotice("Offline: zobrazuji naposledy uložené články. Nové příspěvky se nenačtou.");
+        }else{
+          setOffline(true);
+          setError("Server není dostupný a pro tento účet nemám uložené články.");
+        }
+      }catch{
+        setOffline(true);setError("Nelze načíst server ani lokální offline databázi.");
+      }
+    }finally{if(currentUser.current===user)setLoading(false);}
   },[]);
 
-  useEffect(()=>{if(token)void load(token,feedId);},[token,feedId,load]);
+  useEffect(()=>{if(token&&userId)void load(token,feedId);},[token,userId,feedId,load]);
 
   // Database-wide search, debounced to avoid one request per keystroke.
   useEffect(()=>{
@@ -115,7 +168,26 @@ export function App(){
         const page=await api<EntryPage>(token,"/v1/search?"+params);
         if(!cancelled){setRemoteResults(page.items);setRemoteCursor(page.nextCursor);}
       }catch(error){
-        if(!cancelled)setError(error instanceof Error?error.message:"Vyhledávání selhalo");
+        if(!cancelled){
+          if(error instanceof ApiError && error.status>0){
+            setError(error.message);
+          }else{
+            const cached=await getSnapshot(currentUser.current).catch(()=>null);
+            if(!cancelled&&cached){
+              const needle=query.toLocaleLowerCase("cs");
+              const matches=cached.entries.filter(entry=>(!feedId||entry.feed_id===feedId)&&
+                (entry.title+" "+(entry.summary||"")+" "+(entry.author||""))
+                  .toLocaleLowerCase("cs").includes(needle));
+              const user=currentUser.current;
+              if(!user)return;
+              const pending=await getChanges(user).catch(()=>[]);
+              if(!cancelled&&currentUser.current===user){
+                setRemoteResults(overlayChanges(matches,pending));setRemoteCursor(null);
+              }
+              setOffline(true);
+            }else if(!cancelled)setError("Vyhledávání není dostupné bez serveru nebo uložených článků.");
+          }
+        }
       }finally{if(!cancelled)setSearchBusy(false);}
     },300);
     return()=>{cancelled=true;clearTimeout(timer);};
@@ -137,11 +209,60 @@ export function App(){
     finally{setSearchBusy(false);}
   }
 
+  const flushOffline=useCallback(async(auth:string,user:string)=>{
+    if(flushing.current||!auth||!user||currentUser.current!==user||
+      (typeof navigator!=="undefined"&&!navigator.onLine))return;
+    flushing.current=true;
+    try{
+      const result=await flushChanges(user,async op=>{
+        try{
+          const response=await api<{state:RemoteState}>(
+            auth,"/v1/entries/"+op.entryId+"/state",{
+              method:"PATCH",
+              body:JSON.stringify({[op.field]:op.desired,
+                expectedRevision:op.expectedRevision})
+            });
+          return {kind:"ok" as const,state:response.state};
+        }catch(error){
+          if(error instanceof ApiError && error.status===409 && error.payload?.state)
+            return {kind:"conflict" as const,state:error.payload.state as RemoteState};
+          if(error instanceof ApiError && error.status===404)return {kind:"gone" as const};
+          return {kind:"retry" as const};
+        }
+      });
+      if(currentUser.current!==user)return;
+      await refreshQueue(user);
+      if(result.applied){
+        await load(auth,feedId);
+        setNotice("Synchronizováno: "+result.applied+" offline změn.");
+      }
+      if(result.conflicts)setNotice("Konflikty offline změn vyžadují rozhodnutí uživatele.");
+      if(result.blocked)setOffline(true);
+    }catch(error){
+      setError(error instanceof Error?error.message:"Offline synchronizace selhala");
+    }finally{flushing.current=false;}
+  },[feedId,load,refreshQueue]);
+
   useEffect(()=>{
-    if(!token)return;
+    if(!token||!userId)return;
+    void refreshQueue(userId);
+    const refresh=()=>{
+      if(!document.hidden){
+        void flushOffline(token,userId);
+      }
+    };
+    refresh();
+    const timer=setInterval(refresh,15_000);
+    const reconnected=()=>{refresh();void load(token,feedId);};
+    window.addEventListener("online",reconnected);
+    return()=>{clearInterval(timer);window.removeEventListener("online",reconnected);};
+  },[token,userId,feedId,load,flushOffline,refreshQueue]);
+
+  useEffect(()=>{
+    if(!token||!userId)return;
     let stopped=false,running=false;
     const poll=async()=>{
-      if(running||stopped||document.hidden)return;
+      if(running||stopped||document.hidden||!navigator.onLine)return;
       running=true;
       try{
         for(let pageIndex=0;pageIndex<10;pageIndex++){
@@ -151,21 +272,22 @@ export function App(){
             limit:"100"
           });
           const page=await api<SyncPage>(token,"/v1/sync/states?"+params);
-          if(stopped)return;
+          if(stopped||currentUser.current!==userId)return;
           if(page.items.length){
             const changes=new Map(page.items.map(row=>[row.entry_id,row]));
-            const apply=(entries:Entry[]):Entry[]=>entries.map(entry=>{
+            const pending=await getChanges(userId);
+            const apply=(entries:Entry[]):Entry[]=>overlayChanges(entries.map(entry=>{
               const state=changes.get(entry.id);
               if(!state||Number(entry.revision||0)>Number(state.revision))return entry;
               return {...entry,read_at:state.read_at,starred_at:state.starred_at,
                 saved_at:state.saved_at,revision:Number(state.revision),
                 state_updated_at:state.updated_at};
-            });
+            }),pending);
             setEntries(apply);
             setRemoteResults(current=>current?apply(current):current);
             setActive(current=>current?apply([current])[0]:current);
-            const stats=await api<Stats>(token,"/v1/stats");
-            if(!stopped)setStats(stats);
+            const summary=await api<Stats>(token,"/v1/stats");
+            if(!stopped)setStats(summary);
           }
           syncCursor.current=page.nextCursor||{
             after:page.watermark,
@@ -174,13 +296,13 @@ export function App(){
           if(!page.nextCursor)break;
         }
       }catch{
-        // Transient network failures are retried in the next poll.
+        // Retry once connectivity resumes.
       }finally{running=false;}
     };
     void poll();
     const timer=setInterval(()=>void poll(),20_000);
     return()=>{stopped=true;clearInterval(timer);};
-  },[token]);
+  },[token,userId]);
 
   const currentEntries=useMemo(()=>{
     const term=search.trim().toLocaleLowerCase("cs");
@@ -215,49 +337,79 @@ export function App(){
     try{
       const session=await api<AuthSession>("","/v1/auth/login",{
         method:"POST",body:JSON.stringify({username:usernameInput,password:passwordInput})});
+      currentUser.current=session.user.id;
+      setUserId(session.user.id);
       setToken(session.csrf);setSessionUser(session.user.handle);setPasswordInput("");
     }catch(err){setError(err instanceof Error?err.message:"Přihlášení zamítnuto");}
     finally{setLoading(false);}
   }
   async function logout(){
-    try{await api(token,"/v1/auth/logout",{method:"POST"});}
-    catch(error){setError(error instanceof Error?error.message:"Odhlášení se nezdařilo");}
-    finally{
-      setToken("");setSessionUser("");setEntries([]);setFeeds([]);
+    const user=currentUser.current;
+    const pending=user?(await getChanges(user).catch(()=>[])):[];
+    const warning=pending.length
+      ?"Odhlášením smažeš "+pending.length+" neodeslaných změn a všechny offline články. Pokračovat?"
+      :"Odhlášením odstraníš offline články tohoto účtu z prohlížeče. Pokračovat?";
+    if(!window.confirm(warning))return;
+    try{
+      await api(token,"/v1/auth/logout",{method:"POST"});
+      if(user)await clearOfflineUser(user);
+      currentUser.current="";setUserId("");setToken("");setSessionUser("");
+      setEntries([]);setFeeds([]);setQueueItems([]);setOffline(false);
       syncCursor.current={after:new Date(Date.now()-60_000).toISOString(),
         afterId:"00000000-0000-0000-0000-000000000000"};
+    }catch(error){
+      setError(error instanceof Error?error.message:"Odhlášení selhalo; offline data nebyla smazána.");
     }
   }
   useEffect(()=>{
     let mounted=true;
     void api<AuthSession>("","/v1/auth/session").then(session=>{
-      if(mounted){setToken(session.csrf);setSessionUser(session.user.handle);}
+      if(mounted){
+        currentUser.current=session.user.id;setUserId(session.user.id);
+        setToken(session.csrf);setSessionUser(session.user.handle);
+      }
     }).catch(()=>{});
     return()=>{mounted=false;};
   },[]);
   function switchView(next:FolderView){setView(next);setFeedId("");setActive(null);setMobileNav(false);}
-  async function changeState(entry:Entry,key:"read"|"starred"|"saved"){
-    const current=key==="read"?entry.read_at:key==="starred"?entry.starred_at:entry.saved_at;
-    const val=!current;
-    const next={...entry,[key==="read"?"read_at":key==="starred"?"starred_at":"saved_at"]:val?new Date().toISOString():null};
-    setEntries(old=>old.map(e=>e.id===entry.id?next:e));
-    setRemoteResults(old=>old?old.map(e=>e.id===entry.id?next:e):old);
-    if(active?.id===entry.id)setActive(next);
+  async function changeState(entry:Entry,key:OfflineField){
+    const user=currentUser.current;
+    if(!user)return;
+    const column=key==="read"?"read_at":key==="starred"?"starred_at":"saved_at";
+    const desired=!Boolean(entry[column]);
+    const next={...entry,[column]:desired?new Date().toISOString():null};
+    setEntries(previous=>previous.map(item=>item.id===entry.id?next:item));
+    setRemoteResults(previous=>previous?previous.map(item=>item.id===entry.id?next:item):previous);
+    setActive(previous=>previous?.id===entry.id?next:previous);
     try{
-      const result=await api<{state:{revision:number|string;updated_at:string}}>(
-        token,"/v1/entries/"+entry.id+"/state",{
-          method:"PATCH",body:JSON.stringify({
-            [key]:val,expectedRevision:Number(entry.revision||0)
-          })});
-      const updated={...next,revision:Number(result.state.revision),
-        state_updated_at:result.state.updated_at};
-      setEntries(old=>old.map(e=>e.id===entry.id?updated:e));
-      setRemoteResults(old=>old?old.map(e=>e.id===entry.id?updated:e):old);
-      setActive(old=>old?.id===entry.id?updated:old);
-      const summary=await api<Stats>(token,"/v1/stats");
-      setStats(summary);
-    }catch(e){setError(e instanceof Error?e.message:"Uložení selhalo");void load(token,feedId);}
+      await queueChange(user,entry,key,desired);
+      await refreshQueue(user);
+      if(navigator.onLine)void flushOffline(token,user);
+      else{setOffline(true);setNotice("Změna uložena offline. Odešle se po obnovení spojení.");}
+    }catch(error){
+      setError(error instanceof Error?error.message:"Offline změnu nelze uložit");
+      void load(token,feedId);
+    }
   }
+  async function decideConflict(change:QueuedChange,choice:"local"|"server"){
+    const user=currentUser.current;
+    if(!user)return;
+    try{
+      await resolveConflict(change.id,choice);
+      await refreshQueue(user);
+      if(choice==="local")void flushOffline(token,user);
+      else void load(token,feedId);
+    }catch(error){setError(error instanceof Error?error.message:"Řešení konfliktu selhalo");}
+  }
+  async function wipeLocalCache(){
+    const user=currentUser.current;
+    if(!user||!window.confirm("Opravdu smazat offline články a všechny čekající změny tohoto účtu?"))return;
+    try{
+      await clearOfflineUser(user);setQueueItems([]);
+      setNotice("Lokální offline data byla smazána.");
+    }catch(error){setError(error instanceof Error?error.message:"Smazání offline dat selhalo");}
+  }
+
   async function addSource(e:FormEvent){
     e.preventDefault();setError("");
     try{
@@ -395,7 +547,7 @@ export function App(){
         <button className="mobile-menu" aria-label="Otevřít navigaci" onClick={()=>setMobileNav(true)}>☰</button>
         <div className="search-field"><Icon name="search"/>
           <input type="search" value={search} onChange={e=>setSearch(e.target.value)}
-            placeholder="Hledat v načtených příspěvcích…" aria-label="Hledat"/>
+            placeholder="Hledat v uložených příspěvcích…" aria-label="Hledat"/>
         </div>
         <div className="topbar-actions">
           <button className="icon-action" title="Přepnout téma" onClick={()=>setTheme(t=>t==="dark"?"light":"dark")}>◐</button>
@@ -412,6 +564,21 @@ export function App(){
         </div>
         {error?<div role="alert" className="alert error">{error}</div>:null}
         {notice?<div role="status" className="alert success">{notice}</div>:null}
+        <div className={"offline-status "+(offline?"is-offline":"")}>
+          <span>{offline?"Offline: naposledy uložené články":"Online synchronizace"}</span>
+          <strong>Čeká na odeslání: {pendingCount}</strong>
+          {conflictCount?<strong className="offline-conflict">{conflictCount} konfliktů</strong>:null}
+          <button type="button" onClick={()=>void flushOffline(token,userId)}>Synchronizovat</button>
+          <button type="button" onClick={()=>void wipeLocalCache()}>Smazat offline data</button>
+        </div>
+        {conflictCount>0?<div className="offline-conflicts" role="region" aria-label="Konflikty synchronizace">
+          <h2>Konfliktní změny</h2>
+          {queueItems.filter(item=>item.status==="conflict").map(item=><div key={item.id}>
+            <span>Příspěvek {item.entryId.slice(0,8)} · {item.field}</span>
+            <button onClick={()=>void decideConflict(item,"server")}>Ponechat server</button>
+            <button onClick={()=>void decideConflict(item,"local")}>Použít místní volbu</button>
+          </div>)}
+        </div>:null}
         <div className="toolbar">
           <div className="layouts">
             {([["gallery","▦","Galerie"],["cards","▤","Karty"],["list","☰","Seznam"]] as const).map(([l,g,label])=>

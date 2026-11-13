@@ -74,3 +74,9 @@ Před spuštěním administračního příkazu nastav `READER_BOOTSTRAP_USER` na
 
 ## Automatické testy
 Workflow `.github/workflows/v2-check.yml` ověřuje TypeScript, testy validace, autentizaci, databázové migrace a integrační testy, sestavení React webu i Docker obrazu. Zelené CI potvrzuje kontrolované scénáře, **nikoli** dlouhodobou stabilitu veřejného provozu.
+
+## Offline režim (první etapa)
+
+Otevřená přihlášená karta umí při výpadku spojení zobrazit naposledy uložené textové články a zařadit změny přečtení, oblíbených a uložených položek do lokální fronty. Po obnovení spojení se změny pošlou serveru, který kontroluje revize a případné konflikty. Aplikace ukazuje počet čekajících změn a umožní je vyřešit.
+
+**Nejde ještě o plný offline archiv:** po restartu prohlížeče bez internetu není možné bezpečně ověřit relaci; obrázky a video se neukládají. Detaily, zabezpečení a testy: [OFFLINE.md](docs/OFFLINE.md).
