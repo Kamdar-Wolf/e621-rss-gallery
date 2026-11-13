@@ -12,19 +12,21 @@ export interface Entry {
 export interface Cursor { before:string;beforeId:string }
 export interface EntryPage { items:Entry[];nextCursor:Cursor|null }
 export interface Stats { subscriptions:number;entries:number;unread:number;starred:number;saved:number }
-const BASE="http://127.0.0.1:3100";
-export async function api<T>(token:string,path:string,options:RequestInit={}):Promise<T>{
+export interface AuthSession { user:{id:string;handle:string};csrf:string }
+export async function api<T>(csrfToken:string,path:string,options:RequestInit={}):Promise<T>{
   if(!path.startsWith("/v1/"))throw Error("Invalid API path");
   const headers=new Headers(options.headers);
-  headers.set("Authorization","Bearer "+token);
   if(options.body)headers.set("Content-Type","application/json");
-  let resp:Response;
-  try {resp=await fetch(BASE+path,{...options,headers,cache:"no-store"});}
-  catch {throw Error("Nelze se připojit k místnímu API na 127.0.0.1:3100.");}
-  if(resp.status===204)return undefined as T;
-  if(!resp.ok){
-    const data=await resp.json().catch(()=>({error:"HTTP "+resp.status})) as {error?:string};
-    throw Error(data.error||"HTTP "+resp.status);
+  if(["POST","PUT","PATCH","DELETE"].includes(options.method?.toUpperCase()||"GET") &&
+      !path.startsWith("/v1/auth/login"))
+    headers.set("X-Kr-Csrf",csrfToken);
+  let response:Response;
+  try{response=await fetch("/api"+path,{...options,headers,credentials:"same-origin",cache:"no-store"});}
+  catch{throw Error("API není dostupné. Zkontroluj místní Docker server.");}
+  if(response.status===204)return undefined as T;
+  if(!response.ok){
+    const error=await response.json().catch(()=>({error:"HTTP "+response.status})) as {error?:string};
+    throw Error(error.error||"HTTP "+response.status);
   }
-  return await resp.json() as T;
+  return await response.json() as T;
 }

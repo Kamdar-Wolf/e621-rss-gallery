@@ -27,6 +27,8 @@ jobs:
     env:
       DATABASE_URL: postgresql://reader:ci_reader_password@127.0.0.1:5432/reader
       READER_API_TOKEN: test_only_random_very_long_token_123456789123
+      ALLOW_DEV_TOKEN: 'true'
+      READER_SESSION_SECRET: ci_testing_secret_only_not_for_real_use_123456789
     defaults:
       run:
         working-directory: v2

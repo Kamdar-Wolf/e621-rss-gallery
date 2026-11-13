@@ -1,55 +1,44 @@
 import Fastify from "fastify";
-import cors from "@fastify/cors";
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { z } from "zod";
 import { addFeedSchema, canonicalFeedUrl, cursorSchema, entryStateSchema } from "../../../packages/shared/src/schemas.js";
 import { connectPool } from "./db.js";
+import { configureAuth } from "./auth.js";
 import { importOpml, exportOpml } from "./opml-service.js";
 import { parseOpml } from "../../worker/src/opml.js";
 
-const OWNER_ID = process.env.READER_OWNER_ID || "00000000-0000-4000-8000-000000000001";
-
-function authorized(tokenHeader: unknown, secret: string): boolean {
-  if(typeof tokenHeader !== "string" || !tokenHeader.startsWith("Bearer ")) return false;
-  const incoming = tokenHeader.slice(7);
-  if(!incoming || incoming.length > 512) return false;
-  const first=createHash("sha256").update(incoming).digest();
-  const second=createHash("sha256").update(secret).digest();
-  return timingSafeEqual(first,second);
-}
-
-export function buildApp(pool: pg.Pool, apiToken: string) {
+export function buildApp(pool: pg.Pool, devToken?: string) {
   const app=Fastify({logger: true, bodyLimit: 256*1024, trustProxy: false});
-  void app.register(cors, {origin: process.env.CORS_ORIGIN || false});
+  configureAuth(app,pool,{
+    sessionSecret:process.env.READER_SESSION_SECRET||"",
+    origin:process.env.APP_ORIGIN||"http://127.0.0.1:5173",
+    allowDevToken:process.env.ALLOW_DEV_TOKEN==="true",
+    devToken,
+    devOwnerId:process.env.READER_req.readerUserId!
+  });
   app.get("/health", async () => ({status:"ok",service:"kamdar-reader-api",version:"0.2.0-alpha.1"}));
   app.get("/ready", async (_req,reply) => {
     try { await pool.query("SELECT 1"); return {ready:true}; }
     catch {return reply.code(503).send({ready:false});}
   });
 
-  app.addHook("preHandler", async (request,reply) => {
-    if(request.url === "/health" || request.url === "/ready") return;
-    if(!authorized(request.headers.authorization, apiToken))
-      return reply.code(401).send({error:"Unauthorized"});
-  });
-
-  app.get("/v1/feeds", async () => {
+  app.get("/v1/feeds", async (req) => {
     const {rows}=await pool.query(
       `SELECT f.id,f.title,f.canonical_url AS url,f.last_success_at,f.last_error,f.next_poll_at,f.last_checked_at,f.last_http_status,f.failure_count,
               s.folder_id,fd.name AS folder_name,COALESCE(s.title_override,f.title) AS display_title
          FROM subscriptions s JOIN feeds f ON s.feed_id=f.id
          LEFT JOIN folders fd ON fd.id=s.folder_id AND fd.user_id=s.user_id
-        WHERE s.user_id=$1 ORDER BY display_title ASC`,[OWNER_ID]
+        WHERE s.user_id=$1 ORDER BY display_title ASC`,[req.readerUserId!]
     );
     return {items:rows};
   });
 
-  app.get("/v1/folders", async () => {
+  app.get("/v1/folders", async (req) => {
     const {rows}=await pool.query(
       "SELECT id,parent_id,name,sort_order FROM folders WHERE user_id=$1 "+
-      "ORDER BY sort_order,name,id",[OWNER_ID]);
+      "ORDER BY sort_order,name,id",[req.readerUserId!]);
     return {items:rows};
   });
 
@@ -64,12 +53,12 @@ export function buildApp(pool: pg.Pool, apiToken: string) {
     }catch{
       return reply.code(400).send({error:"Invalid OPML document"});
     }
-    const result=await importOpml(pool,OWNER_ID,raw);
+    const result=await importOpml(pool,req.readerUserId!,raw);
     return reply.code(201).send(result);
   });
 
-  app.get("/v1/opml/export", async () => {
-    const xml=await exportOpml(pool,OWNER_ID);
+  app.get("/v1/opml/export", async (req) => {
+    const xml=await exportOpml(pool,req.readerUserId!);
     return {filename:"kamdar-reader.opml",xml};
   });
 
@@ -94,7 +83,7 @@ export function buildApp(pool: pg.Pool, apiToken: string) {
       await client.query(
         `INSERT INTO subscriptions(id,user_id,feed_id)
          VALUES($1,$2,$3) ON CONFLICT(user_id,feed_id) DO NOTHING`,
-        [randomUUID(),OWNER_ID,feed.rows[0].id]
+        [randomUUID(),req.readerUserId!,feed.rows[0].id]
       );
       await client.query("COMMIT");
       return reply.code(201).send(feed.rows[0]);
@@ -109,7 +98,7 @@ export function buildApp(pool: pg.Pool, apiToken: string) {
     const {rows}=await pool.query(
       `UPDATE feeds SET next_poll_at=NOW() WHERE id=$1
         AND EXISTS(SELECT 1 FROM subscriptions WHERE user_id=$2 AND feed_id=$1)
-        RETURNING id,next_poll_at`,[id,OWNER_ID]);
+        RETURNING id,next_poll_at`,[id,req.readerUserId!]);
     if(!rows.length)return reply.code(404).send({error:"Feed not subscribed"});
     return reply.code(202).send({queued:true,feed:rows[0]});
   });
@@ -119,12 +108,12 @@ export function buildApp(pool: pg.Pool, apiToken: string) {
     if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))
       return reply.code(400).send({error:"Invalid feed id"});
     const {rowCount}=await pool.query(
-      "DELETE FROM subscriptions WHERE user_id=$1 AND feed_id=$2",[OWNER_ID,id]);
+      "DELETE FROM subscriptions WHERE user_id=$1 AND feed_id=$2",[req.readerUserId!,id]);
     if(!rowCount)return reply.code(404).send({error:"Feed not subscribed"});
     return reply.code(204).send();
   });
 
-  app.get("/v1/stats", async () => {
+  app.get("/v1/stats", async (req) => {
     const {rows}=await pool.query(
       `SELECT
         (SELECT COUNT(*)::int FROM subscriptions WHERE user_id=$1) AS subscriptions,
@@ -135,7 +124,7 @@ export function buildApp(pool: pg.Pool, apiToken: string) {
         FROM entries e
         JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1
         LEFT JOIN entry_states es ON es.user_id=$1 AND es.entry_id=e.id`,
-      [OWNER_ID]
+      [req.readerUserId!]
     );
     return rows[0];
   });
@@ -168,7 +157,7 @@ export function buildApp(pool: pg.Pool, apiToken: string) {
             (COALESCE(e.published_at,e.created_at),e.id)<($4::timestamptz,$5::uuid))
         ORDER BY COALESCE(e.published_at,e.created_at) DESC,e.id DESC
         LIMIT $6`,
-       [OWNER_ID,feedId||null,q,before||null,beforeId||null,limit]);
+       [req.readerUserId!,feedId||null,q,before||null,beforeId||null,limit]);
     const last=rows.at(-1);
     return {items:rows,nextCursor:rows.length===limit&&last?
       {before:last.published_at||last.created_at,beforeId:last.id}:null};
@@ -189,7 +178,7 @@ export function buildApp(pool: pg.Pool, apiToken: string) {
           AND ($3::timestamptz IS NULL OR
             (COALESCE(e.published_at,e.created_at),e.id)<($3::timestamptz,$4::uuid))
         ORDER BY COALESCE(e.published_at,e.created_at) DESC,e.id DESC LIMIT $5`,
-      [OWNER_ID,feedId||null,before||null,beforeId||null,limit]
+      [req.readerUserId!,feedId||null,before||null,beforeId||null,limit]
     );
     const last=rows.at(-1);
     return {items:rows,nextCursor:rows.length===limit&&last?
@@ -217,7 +206,7 @@ export function buildApp(pool: pg.Pool, apiToken: string) {
          saved_at=CASE WHEN $8::boolean THEN CASE WHEN $5::boolean THEN NOW() ELSE NULL END ELSE entry_states.saved_at END,
          updated_at=NOW(),revision=entry_states.revision+1
        RETURNING read_at,starred_at,saved_at,revision,updated_at`,
-      [OWNER_ID,params.id,patch.read??null,patch.starred??null,patch.saved??null,
+      [req.readerUserId!,params.id,patch.read??null,patch.starred??null,patch.saved??null,
        patch.read!==undefined,patch.starred!==undefined,patch.saved!==undefined]
     );
     if(!rows.length)return reply.code(404).send({error:"Entry not found"});
@@ -233,8 +222,8 @@ export function buildApp(pool: pg.Pool, apiToken: string) {
 async function main(){
   const token=process.env.READER_API_TOKEN;
   const url=process.env.DATABASE_URL;
-  if(!token || token.length<32 || token==="REPLACE_WITH_RANDOM_TOKEN_AT_LEAST_32_CHARACTERS")
-    throw Error("Set a random READER_API_TOKEN of at least 32 characters");
+  if(!process.env.READER_SESSION_SECRET || process.env.READER_SESSION_SECRET.length<32)
+    throw Error("Set READER_SESSION_SECRET to a random value of at least 32 characters");
   if(!url)throw Error("DATABASE_URL is required");
   const pool=connectPool(url);
   const app=buildApp(pool,token);

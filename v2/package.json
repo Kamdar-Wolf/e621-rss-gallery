@@ -15,7 +15,8 @@
     "worker:watch": "tsx apps/worker/src/main.ts",
     "import:opml": "tsx scripts/import-opml.ts",
     "dev:web": "vite --config vite.config.ts",
-    "build:web": "vite build --config vite.config.ts"
+    "build:web": "vite build --config vite.config.ts",
+    "bootstrap:user": "tsx scripts/create-user.ts"
   },
   "engines": {
     "node": ">=22.12.0"

@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useMemo,useRef,useState, type ChangeEvent, type FormEvent} from "react";
-import {api,type Feed,type Entry,type EntryPage,type Cursor,type Stats} from "./api.js";
+import {api,type AuthSession,type Feed,type Entry,type EntryPage,type Cursor,type Stats} from "./api.js";
 
 type FolderView="all"|"unread"|"starred"|"saved";
 type Layout="gallery"|"cards"|"list";
@@ -43,7 +43,9 @@ function Tile({entry,layout,source,onSelect,onStar,onRead}:{
 }
 
 export function App(){
-  const [tokenInput,setTokenInput]=useState("");
+  const [usernameInput,setUsernameInput]=useState("owner");
+  const [passwordInput,setPasswordInput]=useState("");
+  const [sessionUser,setSessionUser]=useState("");
   const [token,setToken]=useState("");
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState("");
@@ -162,11 +164,24 @@ export function App(){
   async function login(e:FormEvent){
     e.preventDefault();setError("");setLoading(true);
     try{
-      await api<Stats>(tokenInput,"/v1/stats");
-      setToken(tokenInput);setTokenInput("");
-    }catch(err){setError(err instanceof Error?err.message:"Přístup zamítnut");}
+      const session=await api<AuthSession>("","/v1/auth/login",{
+        method:"POST",body:JSON.stringify({username:usernameInput,password:passwordInput})});
+      setToken(session.csrf);setSessionUser(session.user.handle);setPasswordInput("");
+    }catch(err){setError(err instanceof Error?err.message:"Přihlášení zamítnuto");}
     finally{setLoading(false);}
   }
+  async function logout(){
+    try{await api(token,"/v1/auth/logout",{method:"POST"});}
+    catch(error){setError(error instanceof Error?error.message:"Odhlášení se nezdařilo");}
+    finally{setToken("");setSessionUser("");setEntries([]);setFeeds([]);}
+  }
+  useEffect(()=>{
+    let mounted=true;
+    void api<AuthSession>("","/v1/auth/session").then(session=>{
+      if(mounted){setToken(session.csrf);setSessionUser(session.user.handle);}
+    }).catch(()=>{});
+    return()=>{mounted=false;};
+  },[]);
   function switchView(next:FolderView){setView(next);setFeedId("");setActive(null);setMobileNav(false);}
   async function changeState(entry:Entry,key:"read"|"starred"|"saved"){
     const current=key==="read"?entry.read_at:key==="starred"?entry.starred_at:entry.saved_at;
@@ -253,15 +268,19 @@ export function App(){
         <div className="logo-symbol">K<span>·</span></div>
         <div className="eyebrow">KAMDAR READER 2.0</div>
         <h1>Vlastní obsah.<br/>Vlastní čtečka.</h1>
-        <p>Vývojové rozhraní pro místní server. Prozatím používá jednouživatelský přístupový token, nikoli hotové uživatelské účty.</p>
+        <p>Přihlášení k vlastní knihovně. Relace je chráněná HttpOnly cookie a data se ukládají do databáze.</p>
         <form onSubmit={login}>
-          <label htmlFor="dev-token">Přístupový token z místního nastavení API</label>
-          <input id="dev-token" type="password" required minLength={32} value={tokenInput}
-            onChange={e=>setTokenInput(e.target.value)} placeholder="READER_API_TOKEN" autoComplete="off"/>
-          <button className="primary" type="submit" disabled={loading}>{loading?"Ověřuji…":"Otevřít místní knihovnu"}</button>
+          <label htmlFor="reader-username">Uživatelské jméno</label>
+          <input id="reader-username" type="text" required autoComplete="username" value={usernameInput}
+            onChange={e=>setUsernameInput(e.target.value)} placeholder="owner"/>
+          <label htmlFor="reader-password">Heslo</label>
+          <input id="reader-password" type="password" required minLength={12} maxLength={256}
+            value={passwordInput} onChange={e=>setPasswordInput(e.target.value)}
+            placeholder="Tvoje heslo" autoComplete="current-password"/>
+          <button className="primary" type="submit" disabled={loading}>{loading?"Ověřuji…":"Přihlásit se"}</button>
         </form>
         {error?<div className="alert error" role="alert">{error}</div>:null}
-        <small>Token se neukládá do localStorage ani do veřejného zdrojového kódu. API je dostupné pouze na localhostu.</small>
+        <small>Účet se zakládá jednorázově pomocí místního administračního příkazu. Aplikace zatím není určena k veřejnému provozu.</small>
       </div>
     </main>;
   }
@@ -304,8 +323,8 @@ export function App(){
         </div>)}
         {!feeds.length?<p className="muted-small">Zatím žádné zdroje. Přidej RSS nebo importuj OPML.</p>:null}
       </section>
-      <div className="sidebar-bottom"><div className="online-dot"></div>Lokální vývojová instance
-        <button title="Odhlásit" onClick={()=>{setToken("");setEntries([]);setFeeds([]);}}>Odhlásit</button>
+      <div className="sidebar-bottom"><div className="online-dot"></div>{sessionUser||"Lokální instance"}
+        <button title="Odhlásit" onClick={()=>void logout()}>Odhlásit</button>
       </div>
     </aside>
     {mobileNav?<button className="nav-mask" aria-label="Zavřít nabídku" onClick={()=>setMobileNav(false)}/>:null}

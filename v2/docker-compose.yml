@@ -46,10 +46,10 @@ services:
     command: ["node", "dist/apps/api/src/server.js"]
     environment:
       DATABASE_URL: postgresql://reader:reader_dev_only@postgres:5432/reader
-      READER_API_TOKEN: ${READER_API_TOKEN:?Set a random READER_API_TOKEN in v2/.env}
+      READER_SESSION_SECRET: ${READER_SESSION_SECRET:?Set READER_SESSION_SECRET in v2/.env}
+      APP_ORIGIN: http://127.0.0.1:5173
       API_HOST: 0.0.0.0
       API_PORT: 3100
-      CORS_ORIGIN: http://127.0.0.1:5173
     ports:
       - "127.0.0.1:3100:3100"
     depends_on:
