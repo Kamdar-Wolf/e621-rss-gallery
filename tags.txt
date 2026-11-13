@@ -5,9 +5,11 @@
 # Nepřidávej sem celou URL, pouze značky. Nanejvýš 40 značek.
 
 ~aaddcc
+~anchee
 ~barndog
 ~bestiality
 ~carthagetech
+~clopician
 ~crimsoncreaturecreations
 ~digitoxici
 ~dirty.paws
@@ -20,6 +22,7 @@
 ~jishinu
 ~jocarra
 ~johnwulffe
+~koba
 ~lenika
 ~lvl0
 ~maisha_(artist)
