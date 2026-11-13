@@ -210,7 +210,7 @@ async function markSending(op:QueuedChange):Promise<void>{
   const req=store.get(op.id);
   req.onsuccess=()=>{
     const current=req.result as QueuedChange|undefined;
-    if(current?.generation===op.generation)
+    if(current && current.generation===op.generation)
       store.put({...current,inFlight:true} satisfies QueuedChange);
   };
   await done;
