@@ -1,0 +1,26 @@
+name: Kamdar Reader v2 - typecheck and tests
+on:
+  push:
+    branches: ["dev/**"]
+    paths: ["v2/**", ".github/workflows/v2-check.yml"]
+  pull_request:
+    paths: ["v2/**", ".github/workflows/v2-check.yml"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install
+        run: npm install --no-audit --no-fund
+      - name: Typecheck
+        run: npm run check
+      - name: Unit tests
+        run: npm test
