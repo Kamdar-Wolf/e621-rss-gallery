@@ -232,7 +232,16 @@ export function buildApp(pool: pg.Pool, devToken?: string) {
          CASE WHEN $4::boolean IS TRUE THEN clock_timestamp() END,
          CASE WHEN $5::boolean IS TRUE THEN clock_timestamp() END,1
        FROM entries e JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1
-       WHERE e.id=$2 AND ($9::bigint IS NULL OR $9::bigint=0)
+       WHERE e.id=$2 AND (
+         $9::bigint IS NULL
+         OR ($9::bigint=0 AND NOT EXISTS(
+           SELECT 1 FROM entry_states existing
+           WHERE existing.user_id=$1 AND existing.entry_id=e.id))
+         OR EXISTS(
+           SELECT 1 FROM entry_states existing
+           WHERE existing.user_id=$1 AND existing.entry_id=e.id
+             AND existing.revision=$9::bigint)
+       )
        ON CONFLICT(user_id,entry_id) DO UPDATE SET
          read_at=CASE WHEN $6::boolean THEN CASE WHEN $3::boolean THEN clock_timestamp() ELSE NULL END ELSE entry_states.read_at END,
          starred_at=CASE WHEN $7::boolean THEN CASE WHEN $4::boolean THEN clock_timestamp() ELSE NULL END ELSE entry_states.starred_at END,
