@@ -25,7 +25,7 @@ export async function createServer(){
   apiRoutes(app);
   app.setErrorHandler((error,req,reply)=>{
     req.log.error(error);
-    if(error.validation)return reply.code(400).send({error:"Invalid input"});
+    if(error && typeof error==="object" && "validation" in error)return reply.code(400).send({error:"Invalid input"});
     return reply.code(500).send({error:"Internal server error"});
   });
   return app;
