@@ -1,0 +1,38 @@
+# Seznam sledovaných značek e621
+# Každý řádek = jedna značka. Znak ~ znamená OR (některá ze značek).
+# Pro přidání napiš novou značku na vlastní řádek; pro odebrání celý řádek smaž.
+# Řádky začínající # jsou jen komentáře; prázdné řádky se ignorují.
+# Nepřidávej sem celou URL, pouze značky. Nanejvýš 40 značek.
+
+~aaddcc
+~barndog
+~bestiality
+~carthagetech
+~crimsoncreaturecreations
+~digitoxici
+~dirty.paws
+~dzat
+~eipril
+~feral_frenzy
+~fluff-kevlar
+~hioshiru
+~inert-ren
+~jishinu
+~jocarra
+~johnwulffe
+~lenika
+~lvl0
+~maisha_(artist)
+~parooty
+~pb472
+~piporete
+~racf92
+~redraptor16
+~ruaidri
+~the_giant_hamster
+~trioami260
+~tyedie
+~untied_verbeger
+~va_art
+~wolf_islander_(artist)
+~yinglizi
