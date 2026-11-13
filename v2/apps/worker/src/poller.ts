@@ -30,6 +30,7 @@ export async function claimDueFeeds(pool:pg.Pool,limit=10):Promise<DueFeed[]>{
     "WITH due AS ("+
       " SELECT id FROM feeds "+
       " WHERE next_poll_at<=NOW() AND "+
+      " EXISTS(SELECT 1 FROM subscriptions s WHERE s.feed_id=feeds.id) AND "+
       " (fetch_locked_until IS NULL OR fetch_locked_until<NOW()) "+
       " ORDER BY next_poll_at ASC "+
       " LIMIT $1 FOR UPDATE SKIP LOCKED"+

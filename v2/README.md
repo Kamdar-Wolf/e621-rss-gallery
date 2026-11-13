@@ -6,13 +6,25 @@
 - PostgreSQL s tabulkami pro zdroje, odběry, položky, média, uživatelské stavy, poznámky a štítky.
 - Fastify/TypeScript API: `GET /health`, `GET /ready`, `GET /v1/feeds`, `POST /v1/feeds`, `GET /v1/entries`, `PATCH /v1/entries/:id/state`.
 - Jednouživatelská autentizace přes `Authorization: Bearer <READER_API_TOKEN>` (dočasně jen pro vývoj).
-- Docker Compose pouze pro lokální PostgreSQL a Redis.
+- Docker Compose pro PostgreSQL, Redis, databázové migrace, API a worker. Přístupové porty jsou pouze na 127.0.0.1.
 - SQL migrace a automatické testy validace schémat; CI kontrola TypeScriptu.
 - Design tokeny a specifikace budoucího UI.
 
-**Není dosud implementováno:** bezpečné stahování libovolných kanálů z internetu, serverové zpracování RSS, přihlašovací obrazovka, synchronizace produkčního frontend klienta, správa více uživatelů, skutečný media cache backend. Import externích zdrojů v této verzi pouze zapíše adresu do DB. Samotná API služba není publikována.
+**Implementováno:** parser RSS/Atom/JSON Feed, ověřovaný síťový fetcher, serverový poller, uložené příspěvky a diagnostika, import OPML pomocí CLI. **Zbývá:** přihlašovací obrazovka, synchronizace produkčního klienta, správa více uživatelů a mediální cache. API běží pouze lokálně, není veřejně publikováno.
 
 ## Lokální spuštění (vývoj)
+
+### Kompletní Docker stack
+
+Po vytvoření souboru `.env` podle `.env.example` nastav `READER_API_TOKEN` jako náhodný řetězec s alespoň 32 znaky. Použití vzorového tokenu je blokováno. Potom z adresáře `v2` spusť:
+
+```bash
+docker compose up --build -d
+```
+
+API bude dostupné na `http://127.0.0.1:3100/health`. Databáze, migrace i worker se spustí v rámci Compose. **Přístupný jen na lokálním počítači; nejedná se o produkční bezpečné nasazení.**
+
+### Ruční spuštění bez API kontejneru
 Požadavky: Docker Desktop, Node.js 22.12+ a npm.
 
 ```bash

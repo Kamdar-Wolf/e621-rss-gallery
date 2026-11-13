@@ -1,9 +1,8 @@
 import { readFile,readdir } from "node:fs/promises";
-import { join,dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { connectPool } from "../apps/api/src/db.js";
 
-const cwd=dirname(dirname(fileURLToPath(import.meta.url)));
+const cwd=process.cwd();
 async function main(){
   if(!process.env.DATABASE_URL)throw Error("DATABASE_URL is required");
   const pool=connectPool(process.env.DATABASE_URL);

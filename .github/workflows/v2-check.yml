@@ -45,3 +45,5 @@ jobs:
         run: npm run migrate
       - name: Integration tests
         run: npm run test:integration
+      - name: Docker image build
+        run: docker build -t kamdar-reader-v2-ci .

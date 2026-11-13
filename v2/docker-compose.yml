@@ -1,3 +1,5 @@
+# Development-only stack. Ports bound to 127.0.0.1.
+# Not suitable for internet exposure or untrusted users.
 services:
   postgres:
     image: postgres:17-alpine
@@ -13,19 +15,58 @@ services:
       test: ["CMD-SHELL", "pg_isready -U reader -d reader"]
       interval: 5s
       timeout: 5s
-      retries: 12
+      retries: 15
   redis:
     image: redis:7-alpine
-    command: ["redis-server","--appendonly","yes"]
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "127.0.0.1:6381:6379"
     volumes:
       - redisdata:/data
     healthcheck:
-      test: ["CMD","redis-cli","ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 12
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/scripts/migrate.js"]
+    environment:
+      DATABASE_URL: postgresql://reader:reader_dev_only@postgres:5432/reader
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/apps/api/src/server.js"]
+    environment:
+      DATABASE_URL: postgresql://reader:reader_dev_only@postgres:5432/reader
+      READER_API_TOKEN: ${READER_API_TOKEN:?Set a random READER_API_TOKEN in v2/.env}
+      API_HOST: 0.0.0.0
+      API_PORT: 3100
+      CORS_ORIGIN: http://127.0.0.1:5173
+    ports:
+      - "127.0.0.1:3100:3100"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/apps/worker/src/main.js"]
+    environment:
+      DATABASE_URL: postgresql://reader:reader_dev_only@postgres:5432/reader
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 volumes:
   pgdata:
   redisdata:
