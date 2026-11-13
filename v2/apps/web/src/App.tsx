@@ -57,6 +57,9 @@ export function App(){
   const [layout,setLayout]=useState<Layout>("gallery");
   const [media,setMedia]=useState("all");
   const [search,setSearch]=useState("");
+  const [remoteResults,setRemoteResults]=useState<Entry[]|null>(null);
+  const [remoteCursor,setRemoteCursor]=useState<Cursor|null>(null);
+  const [searchBusy,setSearchBusy]=useState(false);
   const [sort,setSort]=useState("newest");
   const [active,setActive]=useState<Entry|null>(null);
   const [newFeed,setNewFeed]=useState("");
@@ -90,19 +93,58 @@ export function App(){
 
   useEffect(()=>{if(token)void load(token,feedId);},[token,feedId,load]);
 
+  // Database-wide search, debounced to avoid one request per keystroke.
+  useEffect(()=>{
+    const query=search.trim();
+    if(!token||query.length<2){
+      setRemoteResults(null);setRemoteCursor(null);setSearchBusy(false);
+      return;
+    }
+    let cancelled=false;
+    setRemoteResults(null);setRemoteCursor(null);setSearchBusy(true);
+    const timer=setTimeout(async()=>{
+      try{
+        const params=new URLSearchParams({q:query,limit:"100"});
+        if(feedId)params.set("feedId",feedId);
+        const page=await api<EntryPage>(token,"/v1/search?"+params);
+        if(!cancelled){setRemoteResults(page.items);setRemoteCursor(page.nextCursor);}
+      }catch(error){
+        if(!cancelled)setError(error instanceof Error?error.message:"Vyhledávání selhalo");
+      }finally{if(!cancelled)setSearchBusy(false);}
+    },300);
+    return()=>{cancelled=true;clearTimeout(timer);};
+  },[search,token,feedId]);
+
+  async function loadMoreSearch(){
+    if(!remoteCursor||search.trim().length<2)return;
+    setSearchBusy(true);
+    try{
+      const params=new URLSearchParams({
+        q:search.trim(),limit:"100",
+        before:remoteCursor.before,beforeId:remoteCursor.beforeId
+      });
+      if(feedId)params.set("feedId",feedId);
+      const page=await api<EntryPage>(token,"/v1/search?"+params);
+      setRemoteResults(previous=>[...(previous||[]),...page.items]);
+      setRemoteCursor(page.nextCursor);
+    }catch(error){setError(error instanceof Error?error.message:"Další výsledky se nenačetly");}
+    finally{setSearchBusy(false);}
+  }
+
   const currentEntries=useMemo(()=>{
     const term=search.trim().toLocaleLowerCase("cs");
-    let results=entries.filter(e=>{
+    let results=(remoteResults||entries).filter(e=>{
       if(view==="unread"&&e.read_at)return false;
       if(view==="starred"&&!e.starred_at)return false;
       if(view==="saved"&&!e.saved_at)return false;
       if(media!=="all"&&e.media_type!==media)return false;
-      return !term||(e.title+" "+(e.summary||"")+" "+(e.author||"")).toLocaleLowerCase("cs").includes(term);
+      return remoteResults!==null || !term ||
+        (e.title+" "+(e.summary||"")+" "+(e.author||"")).toLocaleLowerCase("cs").includes(term);
     });
     if(sort==="oldest")results=results.sort((a,b)=>+new Date(a.published_at||a.created_at)-+new Date(b.published_at||b.created_at));
     else if(sort==="title")results=results.sort((a,b)=>a.title.localeCompare(b.title,"cs"));
     return results;
-  },[entries,view,media,search,sort]);
+  },[entries,remoteResults,view,media,search,sort]);
 
   const sourceNames=useMemo(()=>Object.fromEntries(feeds.map(f=>[f.id,f.display_title||f.title])),[feeds]);
   const groupedFeeds=useMemo(()=>{
@@ -131,6 +173,7 @@ export function App(){
     const val=!current;
     const next={...entry,[key==="read"?"read_at":key==="starred"?"starred_at":"saved_at"]:val?new Date().toISOString():null};
     setEntries(old=>old.map(e=>e.id===entry.id?next:e));
+    setRemoteResults(old=>old?old.map(e=>e.id===entry.id?next:e):old);
     if(active?.id===entry.id)setActive(next);
     try{
       await api(token,"/v1/entries/"+entry.id+"/state",{method:"PATCH",body:JSON.stringify({[key]:val})});
@@ -306,8 +349,9 @@ export function App(){
           </div>
         </div>
         <div className="result-heading">
-          <span>{loading?"Načítám…":currentEntries.length+" zobrazených položek"}{cursor?" · další jsou dostupné":""}</span>
-          <span>Vývojová verze · serverová synchronizace</span>
+          <span>{loading||searchBusy?"Načítám…":currentEntries.length+" zobrazených položek"}{
+            (search.trim().length>=2?remoteCursor:cursor)?" · další jsou dostupné":""}</span>
+          <span>{search.trim().length>=2?"Vyhledávání v databázi":"Vývojová verze · serverová synchronizace"}</span>
         </div>
         <section className={"grid "+layout}>
           {currentEntries.map(e=><Tile key={e.id} entry={e} layout={layout}
@@ -318,8 +362,11 @@ export function App(){
           <span className="empty-glyph">▤</span><h2>Žádné příspěvky k zobrazení</h2>
           <p>Uprav filtr nebo přidej zdroj. RSS worker může potřebovat jeden cyklus ke stažení nového kanálu.</p>
         </div>:null}
-        {cursor?<div className="more"><button className="subtle" disabled={loading}
-          onClick={()=>void load(token,feedId,true,cursor)}>{loading?"Načítám…":"Načíst další příspěvky"}</button></div>:null}
+        {(search.trim().length>=2?remoteCursor:cursor)?<div className="more">
+          <button className="subtle" disabled={loading||searchBusy}
+            onClick={()=>search.trim().length>=2?void loadMoreSearch():void load(token,feedId,true,cursor)}>
+            {loading||searchBusy?"Načítám…":"Načíst další příspěvky"}</button>
+        </div>:null}
       </div>
     </div>
     {active?<div className="reader-mask" onClick={()=>setActive(null)}>
