@@ -28,7 +28,7 @@ const safe=(u:unknown,base?:string):string|null=>{
 };
 const decodeHtml=(s:string)=>s.replace(/&lt;/gi,"<").replace(/&gt;/gi,">").replace(/&quot;/gi,'"').replace(/&apos;/gi,"\'").replace(/&amp;/gi,"&");
 const htmlImage=(s:string,base?:string):string|null=>{
-  const match=/<img\b[^>]*?\b(?:src|data-src)\s*=\s*["']([^"'<>]+)["']/i.exec(s);
+  const match=/<img\b[^>]*?\b(?:src|data-src)\s*=\s*["']([^"'<>]+)["']/i.exec(decodeHtml(s));
   return safe(match?.[1],base);
 };
 const plain=(s:string):string=>s.replace(/<[^>]+>/g," ").replace(/&(?:nbsp|amp|lt|gt|quot);/g," ").replace(/\s+/g," ").trim().slice(0,10000);
