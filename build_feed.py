@@ -14,7 +14,25 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 
-TAGS = """~aaddcc ~barndog ~bestiality ~carthagetech ~crimsoncreaturecreations ~digitoxici ~dirty.paws ~dzat ~eipril ~feral_frenzy ~fluff-kevlar ~hioshiru ~inert-ren ~jishinu ~jocarra ~johnwulffe ~lenika ~lvl0 ~maisha_(artist) ~parooty ~pb472 ~piporete ~racf92 ~redraptor16 ~ruaidri ~the_giant_hamster ~trioami260 ~tyedie ~untied_verbeger ~va_art ~wolf_islander_(artist) ~yinglizi"""
+def load_tags():
+    """Load one search term per line from tags.txt. Ignore comments and duplicates."""
+    filename = Path(__file__).with_name("tags.txt")
+    terms, seen = [], set()
+    for line_number, raw in enumerate(filename.read_text(encoding="utf-8-sig").splitlines(), 1):
+        tag = raw.strip()
+        if not tag or tag.startswith("#"):
+            continue
+        if any(character.isspace() for character in tag):
+            raise ValueError(f"tags.txt line {line_number}: one tag per line, without spaces: {tag!r}")
+        if tag not in seen:
+            terms.append(tag)
+            seen.add(tag)
+    if not 1 <= len(terms) <= 40:
+        raise ValueError(f"tags.txt must have 1 to 40 unique tags, found {len(terms)}")
+    return " ".join(terms)
+
+
+TAGS = load_tags()
 UA = "KamdarE621RSS/1.0 (+https://github.com/Kamdar-Wolf)"
 E621_ATOM = "https://e621.net/posts.atom?" + urlencode({"tags": TAGS, "_client": UA})
 E621_SEARCH = "https://e621.net/posts?" + urlencode({"tags": TAGS})
