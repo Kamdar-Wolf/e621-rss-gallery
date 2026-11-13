@@ -47,5 +47,11 @@ jobs:
         run: npm run test:integration
       - name: Web client build
         run: npm run build:web
+      - name: Archive built web client
+        uses: actions/upload-artifact@v4
+        with:
+          name: kamdar-reader-v2-web
+          path: v2/dist-web
+          retention-days: 3
       - name: Docker image build
         run: docker build -t kamdar-reader-v2-ci .
