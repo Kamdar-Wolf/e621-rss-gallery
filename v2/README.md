@@ -109,3 +109,9 @@ API:
 - `GET /v1/folders` vrací složky importované z OPML.
 
 Všechny tři endpointy jsou autorizované stejným vývojovým tokenem jako zbytek API.
+
+## Serverové vyhledávání článků
+
+Pole Hledat v React klientovi po zadání alespoň dvou znaků posílá dotaz na `GET /v1/search` (300 ms debounce). Výsledky jsou načítány z PostgreSQL, tedy i ze starších příspěvků mimo první načtenou stránku. Podporuje stránkování po dávkách do 100 položek a omezení na konkrétní zdroj.
+
+Limitace: Prohledává se uložený titulek a textový souhrn, nikoli automaticky kompletní obsah cizího webu. Česká morfologie, zvýraznění úryvků a složité uživatelské dotazy jsou další plánované kroky.

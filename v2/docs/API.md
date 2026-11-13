@@ -22,3 +22,10 @@ curl -H "Authorization: Bearer $READER_API_TOKEN" http://127.0.0.1:3100/v1/feeds
 Autentizace přes OIDC/session místo sdíleného tokenu, kurzorování podle (published_at,id), synchronizační revize s řešením konfliktů, pravidla, hromadné akce, ukládání a oprávnění médií. Tyto části není správné považovat za hotové.
 
 Stránkování vrací `nextCursor` s `before` a `beforeId`, aby zachovalo pořadí i u shodných časů publikace. 
+
+## Databázové vyhledávání
+- `GET /v1/search?q=moje+fráze&limit=40`: plnotextové hledání napříč **všemi uloženými články v odběrech aktuálního uživatele**.
+- `feedId=<UUID>`: omezení hledání na jeden kanál.
+- `before=<ISO-8601>&beforeId=<UUID>`: kurzor výsledků pro spolehlivé stránkování i u shodných dat.
+- Vstup: `q` má 2 až 150 znaků. Vyhledávání používá `websearch_to_tsquery('simple')` nad titulkem a textovým souhrnem, tedy neprohledává web ani obrázky.
+- Parametry jsou předány PostgreSQL bezpečně; požadavek bez autorizačního tokenu je odmítnut.
