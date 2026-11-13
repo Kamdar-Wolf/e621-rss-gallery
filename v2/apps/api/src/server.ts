@@ -144,7 +144,7 @@ export function buildApp(pool: pg.Pool, devToken?: string) {
     const {q,feedId,limit,before,beforeId}=parsed.data;
     const {rows}=await pool.query(
       `SELECT e.id,e.feed_id,e.source_url,e.title,e.author,e.summary,e.media_type,e.published_at,e.created_at,
-              es.read_at,es.starred_at,es.saved_at,
+              es.read_at,es.starred_at,es.saved_at,es.revision::int AS revision,es.updated_at AS state_updated_at,
               (SELECT m.source_url FROM entry_media m WHERE m.entry_id=e.id
                 ORDER BY m.position ASC LIMIT 1) AS thumbnail
          FROM entries e
@@ -169,7 +169,7 @@ export function buildApp(pool: pg.Pool, devToken?: string) {
     const {limit,before,beforeId,feedId}=args.data;
     const {rows}=await pool.query(
       `SELECT e.id,e.feed_id,e.source_url,e.title,e.author,e.summary,e.media_type,e.published_at,e.created_at,
-              es.read_at,es.starred_at,es.saved_at,
+              es.read_at,es.starred_at,es.saved_at,es.revision::int AS revision,es.updated_at AS state_updated_at,
               (SELECT m.source_url FROM entry_media m WHERE m.entry_id=e.id
                  ORDER BY m.position ASC LIMIT 1) AS thumbnail
          FROM entries e JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1
@@ -185,6 +185,39 @@ export function buildApp(pool: pg.Pool, devToken?: string) {
       {before:last.published_at||last.created_at,beforeId:last.id}:null};
   });
 
+  const syncSchema=z.object({
+    after:z.iso.datetime({offset:true}).optional(),
+    // Permit RFC 4122 UUIDs plus MIN/MAX sentinel values for the initial cursor.
+    afterId:z.string().regex(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i).optional(),
+    limit:z.coerce.number().int().min(1).max(100).default(50)
+  }).refine(value=>Boolean(value.after)===Boolean(value.afterId),
+    "Both after and afterId are required for a sync cursor");
+
+  app.get("/v1/sync/states", async (req,reply) => {
+    const parsed=syncSchema.safeParse(req.query);
+    if(!parsed.success)return reply.code(400).send({error:"Invalid sync cursor"});
+    const {after,afterId,limit}=parsed.data;
+    // Take the cut-off before the query. New writes after this timestamp
+    // remain visible to the next poll; no device-specific server state needed.
+    const ts=await pool.query<{watermark:Date}>("SELECT clock_timestamp() AS watermark");
+    const watermark=ts.rows[0].watermark;
+    const {rows}=await pool.query(
+      `SELECT st.entry_id,st.read_at,st.starred_at,st.saved_at,st.revision::int AS revision,st.updated_at
+         FROM entry_states st
+         JOIN entries e ON e.id=st.entry_id
+         JOIN subscriptions sub ON sub.feed_id=e.feed_id AND sub.user_id=st.user_id
+        WHERE st.user_id=$1
+          AND ($2::timestamptz IS NULL OR (st.updated_at,st.entry_id)>($2::timestamptz,$3::uuid))
+          AND st.updated_at<=$4
+        ORDER BY st.updated_at ASC,st.entry_id ASC LIMIT $5`,
+      [req.readerUserId!,after||null,afterId||null,watermark,limit]
+    );
+    const last=rows.at(-1);
+    return {items:rows,watermark:watermark.toISOString(),
+      nextCursor:rows.length===limit&&last?
+        {after:last.updated_at,afterId:last.entry_id}:null};
+  });
+
   app.patch("/v1/entries/:id/state", async (req,reply) => {
     const params=req.params as {id?:string};
     if(!params.id || !/^[0-9a-f-]{36}$/i.test(params.id))
@@ -195,21 +228,32 @@ export function buildApp(pool: pg.Pool, devToken?: string) {
     const {rows}=await pool.query(
       `INSERT INTO entry_states(user_id,entry_id,read_at,starred_at,saved_at,revision)
        SELECT $1,e.id,
-         CASE WHEN $3::boolean IS TRUE THEN NOW() END,
-         CASE WHEN $4::boolean IS TRUE THEN NOW() END,
-         CASE WHEN $5::boolean IS TRUE THEN NOW() END,1
+         CASE WHEN $3::boolean IS TRUE THEN clock_timestamp() END,
+         CASE WHEN $4::boolean IS TRUE THEN clock_timestamp() END,
+         CASE WHEN $5::boolean IS TRUE THEN clock_timestamp() END,1
        FROM entries e JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1
-       WHERE e.id=$2
+       WHERE e.id=$2 AND ($9::bigint IS NULL OR $9::bigint=0)
        ON CONFLICT(user_id,entry_id) DO UPDATE SET
-         read_at=CASE WHEN $6::boolean THEN CASE WHEN $3::boolean THEN NOW() ELSE NULL END ELSE entry_states.read_at END,
-         starred_at=CASE WHEN $7::boolean THEN CASE WHEN $4::boolean THEN NOW() ELSE NULL END ELSE entry_states.starred_at END,
-         saved_at=CASE WHEN $8::boolean THEN CASE WHEN $5::boolean THEN NOW() ELSE NULL END ELSE entry_states.saved_at END,
-         updated_at=NOW(),revision=entry_states.revision+1
-       RETURNING read_at,starred_at,saved_at,revision,updated_at`,
+         read_at=CASE WHEN $6::boolean THEN CASE WHEN $3::boolean THEN clock_timestamp() ELSE NULL END ELSE entry_states.read_at END,
+         starred_at=CASE WHEN $7::boolean THEN CASE WHEN $4::boolean THEN clock_timestamp() ELSE NULL END ELSE entry_states.starred_at END,
+         saved_at=CASE WHEN $8::boolean THEN CASE WHEN $5::boolean THEN clock_timestamp() ELSE NULL END ELSE entry_states.saved_at END,
+         updated_at=GREATEST(clock_timestamp(),entry_states.updated_at+INTERVAL '1 microsecond'),
+         revision=entry_states.revision+1
+       WHERE ($9::bigint IS NULL OR entry_states.revision=$9::bigint)
+       RETURNING read_at,starred_at,saved_at,revision::int AS revision,updated_at`,
       [req.readerUserId!,params.id,patch.read??null,patch.starred??null,patch.saved??null,
-       patch.read!==undefined,patch.starred!==undefined,patch.saved!==undefined]
+       patch.read!==undefined,patch.starred!==undefined,patch.saved!==undefined,
+       patch.expectedRevision??null]
     );
-    if(!rows.length)return reply.code(404).send({error:"Entry not found"});
+    if(!rows.length){
+      const existing=await pool.query(
+        "SELECT st.revision::int AS revision,st.read_at,st.starred_at,st.saved_at,st.updated_at "+
+        "FROM entries e JOIN subscriptions sub ON sub.feed_id=e.feed_id AND sub.user_id=$1 "+
+        "LEFT JOIN entry_states st ON st.entry_id=e.id AND st.user_id=$1 WHERE e.id=$2",
+        [req.readerUserId!,params.id]);
+      if(!existing.rows.length)return reply.code(404).send({error:"Entry not found"});
+      return reply.code(409).send({error:"State changed on another device",state:existing.rows[0]});
+    }
     return {state:rows[0]};
   });
   app.setErrorHandler((err,req,reply)=>{

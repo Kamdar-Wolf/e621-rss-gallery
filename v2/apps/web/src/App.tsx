@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useMemo,useRef,useState, type ChangeEvent, type FormEvent} from "react";
-import {api,type AuthSession,type Feed,type Entry,type EntryPage,type Cursor,type Stats} from "./api.js";
+import {api,type AuthSession,type SyncPage,type SyncState,type Feed,type Entry,type EntryPage,type Cursor,type Stats} from "./api.js";
 
 type FolderView="all"|"unread"|"starred"|"saved";
 type Layout="gallery"|"cards"|"list";
@@ -69,6 +69,10 @@ export function App(){
   const [adding,setAdding]=useState(false);
   const [mobileNav,setMobileNav]=useState(false);
   const [theme,setTheme]=useState<"dark"|"light">("dark");
+  const syncCursor=useRef<{after:string;afterId:string}>({
+    after:new Date(Date.now()-60_000).toISOString(),
+    afterId:"00000000-0000-0000-0000-000000000000"
+  });
   const opmlInput=useRef<HTMLInputElement>(null);
   const [opmlBusy,setOpmlBusy]=useState(false);
 
@@ -133,6 +137,51 @@ export function App(){
     finally{setSearchBusy(false);}
   }
 
+  useEffect(()=>{
+    if(!token)return;
+    let stopped=false,running=false;
+    const poll=async()=>{
+      if(running||stopped||document.hidden)return;
+      running=true;
+      try{
+        for(let pageIndex=0;pageIndex<10;pageIndex++){
+          const params=new URLSearchParams({
+            after:syncCursor.current.after,
+            afterId:syncCursor.current.afterId,
+            limit:"100"
+          });
+          const page=await api<SyncPage>(token,"/v1/sync/states?"+params);
+          if(stopped)return;
+          if(page.items.length){
+            const changes=new Map(page.items.map(row=>[row.entry_id,row]));
+            const apply=(entries:Entry[]):Entry[]=>entries.map(entry=>{
+              const state=changes.get(entry.id);
+              if(!state||Number(entry.revision||0)>Number(state.revision))return entry;
+              return {...entry,read_at:state.read_at,starred_at:state.starred_at,
+                saved_at:state.saved_at,revision:Number(state.revision),
+                state_updated_at:state.updated_at};
+            });
+            setEntries(apply);
+            setRemoteResults(current=>current?apply(current):current);
+            setActive(current=>current?apply([current])[0]:current);
+            const stats=await api<Stats>(token,"/v1/stats");
+            if(!stopped)setStats(stats);
+          }
+          syncCursor.current=page.nextCursor||{
+            after:page.watermark,
+            afterId:"ffffffff-ffff-ffff-ffff-ffffffffffff"
+          };
+          if(!page.nextCursor)break;
+        }
+      }catch{
+        // Transient network failures are retried in the next poll.
+      }finally{running=false;}
+    };
+    void poll();
+    const timer=setInterval(()=>void poll(),20_000);
+    return()=>{stopped=true;clearInterval(timer);};
+  },[token]);
+
   const currentEntries=useMemo(()=>{
     const term=search.trim().toLocaleLowerCase("cs");
     let results=(remoteResults||entries).filter(e=>{
@@ -173,7 +222,11 @@ export function App(){
   async function logout(){
     try{await api(token,"/v1/auth/logout",{method:"POST"});}
     catch(error){setError(error instanceof Error?error.message:"Odhlášení se nezdařilo");}
-    finally{setToken("");setSessionUser("");setEntries([]);setFeeds([]);}
+    finally{
+      setToken("");setSessionUser("");setEntries([]);setFeeds([]);
+      syncCursor.current={after:new Date(Date.now()-60_000).toISOString(),
+        afterId:"00000000-0000-0000-0000-000000000000"};
+    }
   }
   useEffect(()=>{
     let mounted=true;
@@ -191,7 +244,16 @@ export function App(){
     setRemoteResults(old=>old?old.map(e=>e.id===entry.id?next:e):old);
     if(active?.id===entry.id)setActive(next);
     try{
-      await api(token,"/v1/entries/"+entry.id+"/state",{method:"PATCH",body:JSON.stringify({[key]:val})});
+      const result=await api<{state:{revision:number|string;updated_at:string}}>(
+        token,"/v1/entries/"+entry.id+"/state",{
+          method:"PATCH",body:JSON.stringify({
+            [key]:val,expectedRevision:Number(entry.revision||0)
+          })});
+      const updated={...next,revision:Number(result.state.revision),
+        state_updated_at:result.state.updated_at};
+      setEntries(old=>old.map(e=>e.id===entry.id?updated:e));
+      setRemoteResults(old=>old?old.map(e=>e.id===entry.id?updated:e):old);
+      setActive(old=>old?.id===entry.id?updated:old);
       const summary=await api<Stats>(token,"/v1/stats");
       setStats(summary);
     }catch(e){setError(e instanceof Error?e.message:"Uložení selhalo");void load(token,feedId);}

@@ -8,10 +8,17 @@ export interface Entry {
   summary:string|null;media_type:string;published_at:string|null;
   created_at:string;thumbnail:string|null;
   read_at:string|null;starred_at:string|null;saved_at:string|null;
+  revision:number|null;state_updated_at:string|null;
 }
 export interface Cursor { before:string;beforeId:string }
 export interface EntryPage { items:Entry[];nextCursor:Cursor|null }
 export interface Stats { subscriptions:number;entries:number;unread:number;starred:number;saved:number }
+export interface SyncState {
+  entry_id:string;read_at:string|null;starred_at:string|null;
+  saved_at:string|null;revision:number;updated_at:string;
+}
+export interface SyncPage {items:SyncState[];watermark:string;
+  nextCursor:{after:string;afterId:string}|null}
 export interface AuthSession { user:{id:string;handle:string};csrf:string }
 export async function api<T>(csrfToken:string,path:string,options:RequestInit={}):Promise<T>{
   if(!path.startsWith("/v1/"))throw Error("Invalid API path");

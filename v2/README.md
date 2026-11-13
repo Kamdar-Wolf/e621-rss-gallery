@@ -1,117 +1,76 @@
-# Kamdar Reader 2.0 — foundation (vývojová verze)
+# Kamdar Reader 2.0 – vývojová aplikace
 
-**Nejedná se o hotovou produkční čtečku.** Je to první funkční vrstva nové architektury navazující na Kamdar Reader 0.1. Současná webová galerie na `main` zůstává beze změny.
+**Stav:** lokální vývojový prototyp. Původní veřejná RSS galerie ve větvi `main` zůstává funkční a oddělená. Nové funkce jsou ve větvi `dev/v2-foundation`.
 
-## Co je obsaženo
-- PostgreSQL s tabulkami pro zdroje, odběry, položky, média, uživatelské stavy, poznámky a štítky.
-- Fastify/TypeScript API: `GET /health`, `GET /ready`, `GET /v1/feeds`, `POST /v1/feeds`, `GET /v1/entries`, `PATCH /v1/entries/:id/state`.
-- Jednouživatelská autentizace přes `Authorization: Bearer <READER_API_TOKEN>` (dočasně jen pro vývoj).
-- Docker Compose pro PostgreSQL, Redis, databázové migrace, API a worker. Přístupové porty jsou pouze na 127.0.0.1.
-- SQL migrace a automatické testy validace schémat; CI kontrola TypeScriptu.
-- Design tokeny a specifikace budoucího UI.
+## Co v této verzi funguje
+- Backend Fastify/TypeScript, PostgreSQL, Docker Compose a RSS/Atom/JSON Feed worker s diagnostikou stahování.
+- React čtečka s galerií, seznamem, detailem, přečtenými, oblíbenými a „číst později“.
+- OPML import/export přímo z UI, složky, vyhledávání v celé databázi článků.
+- Účty vytvářené správcem, přihlášení heslem, zabezpečené odvolatelné relace a ochrana proti CSRF.
+- Izolace odběrů a uživatelských stavů mezi účty.
+- První synchronizace stavu přečtení, oblíbených a uložených položek: API vrací změny a online klient je kontroluje přibližně každých 20 sekund. Při konfliktu revizí server neprovede tiché přepsání.
 
-**Implementováno:** parser RSS/Atom/JSON Feed, ověřovaný síťový fetcher, serverový poller, uložené příspěvky a diagnostika, import OPML pomocí CLI. **Zbývá:** přihlašovací obrazovka, synchronizace produkčního klienta, správa více uživatelů a mediální cache. API běží pouze lokálně, není veřejně publikováno.
+**Dosud chybí:** offline fronta změn, synchronizace štítků/poznámek/nastavení, pokročilé zobrazení více obrázků, vlastní mediální proxy, skutečné produkční účty s MFA, zabezpečený provoz na veřejné doméně a testy původních zdrojů na cílovém serveru.
 
-## Lokální spuštění (vývoj)
+## Spuštění na Windows – lokální vývoj
 
-### Kompletní Docker stack
+Požadavky: Git, Docker Desktop, Node.js 22+, npm a PowerShell.
 
-Po vytvoření souboru `.env` podle `.env.example` nastav `READER_API_TOKEN` jako náhodný řetězec s alespoň 32 znaky. Použití vzorového tokenu je blokováno. Potom z adresáře `v2` spusť:
+1. Otevři složku `v2` v naklonovaném projektu.
+2. Vytvoř vlastní konfiguraci:
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+3. V `.env` změň `READER_SESSION_SECRET` na **náhodnou hodnotu alespoň 32 znaků**, nikdy nepoužívej ukázkový text. Můžeš ji vytvořit v PowerShellu:
+   ```powershell
+   $bytes = New-Object byte[] 48
+   [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+   [Convert]::ToBase64String($bytes)
+   ```
+   Výsledek zkopíruj za `READER_SESSION_SECRET=`. Tento soubor se nepublikuje do GitHubu.
+4. Spusť backend a databázi:
+   ```powershell
+   docker compose up --build -d
+   ```
+5. Jednorázově nastav heslo uživatele `owner` pomocí PowerShellu tak, aby se nezobrazovalo na obrazovce:
+   ```powershell
+   $secure = Read-Host "Zvol heslo (alespon 12 znaku)" -AsSecureString
+   $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+   try {
+     $env:READER_BOOTSTRAP_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+     docker compose exec -e READER_BOOTSTRAP_PASSWORD api node dist/scripts/create-user.js
+   } finally {
+     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+     Remove-Item Env:READER_BOOTSTRAP_PASSWORD -ErrorAction SilentlyContinue
+   }
+   ```
+6. Spusť nové webové rozhraní:
+   ```powershell
+   npm install
+   npm run dev:web
+   ```
+7. Otevři **http://127.0.0.1:5173/** a přihlas se jménem `owner` a zvoleným heslem.
 
-```bash
-docker compose up --build -d
-```
+Backend má lokální adresu **http://127.0.0.1:3100/health**; web používá Vite proxy `/api` a nemusí ukládat žádné tajné tokeny do JavaScriptu.
 
-API bude dostupné na `http://127.0.0.1:3100/health`. Databáze, migrace i worker se spustí v rámci Compose. **Přístupný jen na lokálním počítači; nejedná se o produkční bezpečné nasazení.**
+### Přidání dalších účtů
+Před spuštěním administračního příkazu nastav `READER_BOOTSTRAP_USER` na jedinečné jméno (3–32 znaků, malá písmena, čísla, pomlčka, podtržítko). Použij stejný bezpečný postup pro předání hesla. Volání příkazu se stejným jménem nastaví nové heslo a zneplatní staré relace.
 
-### Ruční spuštění bez API kontejneru
-Požadavky: Docker Desktop, Node.js 22.12+ a npm.
+### Provozní a bezpečnostní hranice
+- Lokální HTTP režim je určen **výhradně pro důvěryhodný vývojový počítač**. Nepřesměrovávej port 3100 do internetu.
+- Produkční režim musí běžet za TLS reverse proxy, s nastavenou skutečnou `APP_ORIGIN`, silným tajemstvím relací, MFA, centrálním rate-limitingem a bezpečnostním auditem.
+- Původní vývojový bearer token je ve veřejném nasazení vypnutý a lze jej výslovně použít jen v neprodukčních testech (nastavení `ALLOW_DEV_TOKEN`).
+- Cookie používá HttpOnly a SameSite=Strict, změnové požadavky kontrolují Origin i CSRF hlavičku; samotná existence těchto ochran nenahrazuje kompletní bezpečnostní audit.
+- Soukromé OPML soubory mohou obsahovat tajné URL; neukládej je do veřejného GitHub repozitáře.
+- PostgreSQL heslo v ukázkovém Docker Compose je **pouze pro lokální vývoj**.
 
-```bash
-cd v2
-docker compose up -d
-npm install
-cp .env.example .env
-```
+## Dokumentace
+- [Účty a zabezpečení](docs/AUTH.md)
+- [Synchronizace stavů](docs/SYNC.md)
+- [RSS stahování a parser](docs/INGEST.md)
+- [API](docs/API.md)
+- [Grafický systém](design/UI-SPEC.md)
+- [Celkový realizační plán](../ROADMAP_V2_CZ.md)
 
-Ve Windows se `.env.example` kopíruje na `.env` pomocí Průzkumníka nebo PowerShell:
-```powershell
-Copy-Item .env.example .env
-```
-
-V `.env` nastav náhodný `READER_API_TOKEN` alespoň 32 znaků. Výchozí DB heslo `reader_dev_only` je určeno pouze pro počítač vývojáře; nikdy pro server přístupný z internetu. Proměnné `.env` musí být načteny do procesu (např. `node --env-file=.env` nebo prostřednictvím shellu). Pro příkazy níže lze použít:
-
-```bash
-node --env-file=.env --import tsx scripts/migrate.ts
-node --env-file=.env --import tsx apps/api/src/server.ts
-```
-
-Připojení dostupné výhradně na `127.0.0.1:3100`. Kontrola:
-```bash
-curl http://127.0.0.1:3100/health
-```
-
-Příklady zabezpečených endpointů jsou uvedeny v `docs/API.md`.
-
-## Bezpečnostní hranice
-- API používá **vývojový jeden účet a jeden token**. Není to hotové přihlašování se správou relací, MFA ani multi-tenant autorizace.
-- Nezpřístupňovat port 3100 na internetu. Pro vývoj je vázán na loopback.
-- Konfigurovat CORS jen pro důvěryhodný klientský origin.
-- Backend neprovádí HTTP GET na URL uložené v `feeds`, dokud nebude dodán bezpečný worker s ochranou proti SSRF.
-- Migrační skript nepoužívat souběžně ve více instancích.
-- Pro další iteraci je nutná revize DB vazeb štítků a uživatelských oprávnění, bezpečnostní testy a OIDC.
-
-## CI
-Na vývojové větvi probíhá TypeScript typecheck a unit testy. Databázové integrační testy přibudou v další etapě.
-
-## Další navazující úkoly
-1. Serverový fetcher s DNS/IP validací, ochranou proti SSRF, limity a backoff.
-2. RSS/Atom/JSON Feed parser a datové importy všech 37 původních kanálů.
-3. Frontend React/TypeScript v `v2/apps/web` s design tokeny a bezpečným přístupem k API.
-4. Web autentizace a synchronizace mezi Android/Windows.
-5. Galerie/komiksy/podcasty a serverové automatizace.
-
-Detailní celkový plán: `../ROADMAP_V2_CZ.md`.
-
-
-## Nový frontend React (lokální vývoj)
-
-V `apps/web` je první grafický klient pro nové API. Běží samostatně na `http://127.0.0.1:5173/` a umí zobrazit odběry, položky, obrázkovou galerii, seznam, stav přečtení, hvězdičky, uložené příspěvky, statistiky, vyhledávání mezi načtenými položkami, přidat či odebrat zdroj a požádat worker o obnovení.
-
-Po spuštění Docker stacku v adresáři `v2` a instalaci npm balíčků:
-
-```bash
-npm run dev:web
-```
-
-Pro přístup zadej hodnotu svého vývojového `READER_API_TOKEN` z lokálního `.env`. Token je pouze v paměti otevřeného klienta (po opětovném načtení stránky je nutné jej zadat znovu). **Není určen pro veřejnou webovou aplikaci ani pro sdílení.** Po změnách v backendu jej bude potřeba nahradit bezpečným session přihlášením.
-
-```bash
-npm run build:web
-```
-
-Sestavení ověřuje, že UI lze přeložit a připravit ke statickému publikování. Nesmí se však nasazovat do veřejného hostingu bez produkční autentizace a správného backendu.
-
-
-## Import/export OPML přímo v aplikaci (vývojová verze 2.0)
-
-V levém panelu **Zdroje** jsou tlačítka **Import OPML** a **Export OPML**.
-
-- Import podporuje XML OPML včetně vnořených složek a automaticky vynechá duplicitní odběry.
-- Import je transakční: pokud databázový zápis selže, import se vrátí zpět.
-- Limit importovaného souboru z UI je 190 kB (API přijímá do 200 kB).
-- Export ukládá soubor `kamdar-reader.opml` do počítače. **Pozor:** může obsahovat soukromé URL a přístupové tokeny ve zdrojových adresách – neposílat jej do veřejného repozitáře.
-- Jde stále o jednouživatelskou místní vývojovou instanci. K nasazení přes internet bude nutné nahradit vývojový bearer token bezpečnými účty a relacemi.
-
-API:
-- `POST /v1/opml/import` s JSON `{"opml":"<opml ...>..." }` vrací počet nových a existujících odběrů.
-- `GET /v1/opml/export` vrací `{"filename":"kamdar-reader.opml","xml":"..."}`.
-- `GET /v1/folders` vrací složky importované z OPML.
-
-Všechny tři endpointy jsou autorizované stejným vývojovým tokenem jako zbytek API.
-
-## Serverové vyhledávání článků
-
-Pole Hledat v React klientovi po zadání alespoň dvou znaků posílá dotaz na `GET /v1/search` (300 ms debounce). Výsledky jsou načítány z PostgreSQL, tedy i ze starších příspěvků mimo první načtenou stránku. Podporuje stránkování po dávkách do 100 položek a omezení na konkrétní zdroj.
-
-Limitace: Prohledává se uložený titulek a textový souhrn, nikoli automaticky kompletní obsah cizího webu. Česká morfologie, zvýraznění úryvků a složité uživatelské dotazy jsou další plánované kroky.
+## Automatické testy
+Workflow `.github/workflows/v2-check.yml` ověřuje TypeScript, testy validace, autentizaci, databázové migrace a integrační testy, sestavení React webu i Docker obrazu. Zelené CI potvrzuje kontrolované scénáře, **nikoli** dlouhodobou stabilitu veřejného provozu.

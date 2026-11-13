@@ -1,31 +1,35 @@
-# API kontrakt (vývojový)
+# API Kamdar Reader 2.0 – vývojový kontrakt
 
-## Zabezpečení
-Vše kromě `/health` a `/ready` vyžaduje `Authorization: Bearer <READER_API_TOKEN>`. Token je **serverové tajemství**, nikdy jej nevkládat do veřejného JavaScriptu.
+## Přístup
+Prohlížeč používá **same-origin** `/api/v1/...` (Vite proxy směruje na lokální Fastify API `/v1/...`). Neposílej hesla ani session cookie do URL.
 
-- `GET /health`: liveness, neověřuje DB.
-- `GET /ready`: připojení k PostgreSQL; při selhání HTTP 503.
-- `GET /v1/feeds`: přihlášené odběry uživatele.
-- `POST /v1/feeds`: JSON `{"url":"https://example.com/feed.xml","title":"Volitelný název"}`; ukládá adresu, **zatím nestahuje**.
-- `POST /v1/feeds/<UUID>/refresh`: zařadí zdroj do nejbližšího cyklu workeru (HTTP 202). Nečeká na samotné stažení.
-- `DELETE /v1/feeds/<UUID>`: odebere vlastní odběr, společná data sdíleného feedu zůstávají (HTTP 204).
-- `GET /v1/stats`: počty kanálů, položek, nepřečtených a uložených.
-- `GET /v1/entries?limit=30&feedId=<UUID>&before=<ISO-8601>&beforeId=<UUID>`: časově řazené položky z dostupných odběrů.
-- `PATCH /v1/entries/<UUID>/state`: `{"read":true,"starred":false,"saved":true}`. Nezadané hodnoty se nemění. API vrací aktuální revizi stavu.
+- `POST /v1/auth/login` – JSON `{"username":"owner","password":"..."}`, vrací `{user,csrf}` a nastaví HttpOnly relaci.
+- `GET /v1/auth/session` – vrací stav existující relace a CSRF token.
+- `POST /v1/auth/logout` – odvolá relaci na serveru.
+- Změnové požadavky vyžadují hlavičku `X-Kr-Csrf` a správný `Origin`.
+- `GET /health` a `GET /ready` – nezabezpečené kontrolní endpointy.
+- Původní bearer token funguje pouze při výslovném zapnutí v neprodukčním prostředí a je určen jen pro přechodové integrační testy.
 
-### Příklad
-```bash
-curl -H "Authorization: Bearer $READER_API_TOKEN" http://127.0.0.1:3100/v1/feeds
-```
+## Odběry a složky
+- `GET /v1/feeds` – kanály přihlášeného uživatele.
+- `POST /v1/feeds` – přidá kanál. JSON `{"url":"https://example.org/feed.xml","title":"Volitelný název"}`.
+- `DELETE /v1/feeds/<UUID>` – odhlásí odběr, neodstraňuje společné články ostatních uživatelů.
+- `POST /v1/feeds/<UUID>/refresh` – zařadí kanál do aktualizačního cyklu, vrací HTTP 202.
+- `GET /v1/folders` – složky aktuálního uživatele.
+- `POST /v1/opml/import` – JSON `{"opml":"<opml>...</opml>"}`, do 200 kB.
+- `GET /v1/opml/export` – JSON s názvem a obsahem XML.
+- `GET /v1/stats` – počty článků a uživatelských stavů.
 
-### Plánované změny kontraktu
-Autentizace přes OIDC/session místo sdíleného tokenu, kurzorování podle (published_at,id), synchronizační revize s řešením konfliktů, pravidla, hromadné akce, ukládání a oprávnění médií. Tyto části není správné považovat za hotové.
+## Příspěvky a hledání
+- `GET /v1/entries?limit=30&feedId=<UUID>&before=<ISO>&beforeId=<UUID>`.
+- `GET /v1/search?q=dotaz&feedId=<UUID>&limit=40&before=<ISO>&beforeId=<UUID>`.
+- `PATCH /v1/entries/<UUID>/state`: JSON `{"read":true,"starred":false,"expectedRevision":3}`.
+  Pokud se verze změnila na jiném zařízení, vrátí HTTP 409 s aktuálním stavem. Bez `expectedRevision` jde o zpětně kompatibilní poslední-zápis-vyhrává.
 
-Stránkování vrací `nextCursor` s `before` a `beforeId`, aby zachovalo pořadí i u shodných časů publikace. 
+## Synchronizace
+- `GET /v1/sync/states?after=<ISO>&afterId=<UUID>&limit=50` – změny stavu u příspěvků, které uživatel sleduje.
+- Po stránkách vrací `{items,nextCursor,watermark}`; pokud není `nextCursor`, klient může v dalším dotazu použít `watermark` a maximální UUID.
+- Každá položka vrací `entry_id,read_at,starred_at,saved_at,revision,updated_at`.
+- Jde o **polling**; není implementován WebSocket, push ani bezpečná offline fronta.
 
-## Databázové vyhledávání
-- `GET /v1/search?q=moje+fráze&limit=40`: plnotextové hledání napříč **všemi uloženými články v odběrech aktuálního uživatele**.
-- `feedId=<UUID>`: omezení hledání na jeden kanál.
-- `before=<ISO-8601>&beforeId=<UUID>`: kurzor výsledků pro spolehlivé stránkování i u shodných dat.
-- Vstup: `q` má 2 až 150 znaků. Vyhledávání používá `websearch_to_tsquery('simple')` nad titulkem a textovým souhrnem, tedy neprohledává web ani obrázky.
-- Parametry jsou předány PostgreSQL bezpečně; požadavek bez autorizačního tokenu je odmítnut.
+Další podrobnosti a provozní omezení viz [AUTH.md](AUTH.md) a [SYNC.md](SYNC.md).

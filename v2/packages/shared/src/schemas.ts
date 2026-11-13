@@ -8,8 +8,10 @@ export const addFeedSchema = z.object({
 export const entryStateSchema = z.object({
   read: z.boolean().optional(),
   starred: z.boolean().optional(),
-  saved: z.boolean().optional()
-}).strict().refine(value => Object.keys(value).length > 0, "At least one state must be supplied");
+  saved: z.boolean().optional(),
+  expectedRevision: z.number().int().min(0).safe().optional()
+}).strict().refine(value => ["read","starred","saved"].some(key=>key in value),
+  "At least one state change must be supplied");
 export const cursorSchema = z.object({
   before: z.iso.datetime({ offset: true }).optional(),
   beforeId: z.uuid().optional(),

@@ -79,6 +79,31 @@ test("subscriptions and entry states are isolated per user",async()=>{
   const mark=await app.inject({method:"PATCH",url:"/v1/entries/"+entryId+"/state",
     headers:headers(sessionA,true),payload:{read:true,starred:true}});
   assert.equal(mark.statusCode,200,mark.body);
+  const secondDevice=await login(usernameA);
+  const changes=await app.inject({method:"GET",url:"/v1/sync/states?limit=100",
+    headers:headers(secondDevice)});
+  assert.equal(changes.statusCode,200,changes.body);
+  assert.ok(changes.json().items.some((e:{entry_id:string})=>e.entry_id===entryId));
+  const revision=Number(mark.json().state.revision);
+  const outdated=await app.inject({method:"PATCH",url:"/v1/entries/"+entryId+"/state",
+    headers:headers(secondDevice,true),
+    payload:{saved:true,expectedRevision:0}});
+  assert.equal(outdated.statusCode,409,outdated.body);
+  const updated=await app.inject({method:"PATCH",url:"/v1/entries/"+entryId+"/state",
+    headers:headers(secondDevice,true),
+    payload:{saved:true,expectedRevision:revision}});
+  assert.equal(updated.statusCode,200,updated.body);
+  assert.equal(Number(updated.json().state.revision),revision+1);
+  const deltaParams=new URLSearchParams({
+    after:new Date(Date.now()-60_000).toISOString(),
+    afterId:"00000000-0000-0000-0000-000000000000"
+  });
+  const delta=await app.inject({method:"GET",url:"/v1/sync/states?"+deltaParams,
+    headers:headers(sessionA)});
+  assert.equal(delta.statusCode,200,delta.body);
+  const saved=delta.json().items.find((e:{entry_id:string})=>e.entry_id===entryId);
+  assert.ok(saved);
+  assert.ok(saved.saved_at);
   const other=await app.inject({method:"PATCH",url:"/v1/entries/"+entryId+"/state",
     headers:headers(sessionB,true),payload:{starred:true}});
   assert.equal(other.statusCode,404,other.body);
