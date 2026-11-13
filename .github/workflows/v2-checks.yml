@@ -1,0 +1,50 @@
+name: Kamdar Reader v2 checks
+on:
+  push:
+    branches: [dev-v2]
+    paths:
+      - 'apps/**'
+      - 'package.json'
+      - '.github/workflows/v2-checks.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'package.json'
+      - '.github/workflows/v2-checks.yml'
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: reader
+          POSTGRES_PASSWORD: reader_test
+          POSTGRES_DB: reader_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U reader -d reader_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://reader:reader_test@localhost:5432/reader_test
+      TEST_DATABASE_URL: postgresql://reader:reader_test@localhost:5432/reader_test
+      BOOTSTRAP_TOKEN: test-token-github-actions
+      COOKIE_SECURE: 'false'
+      PUBLIC_ORIGIN: http://localhost:5173
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Automated tests
+        run: npm run test
+      - name: Build API and client
+        run: npm run build
