@@ -24,6 +24,9 @@ test("bootstrap, CSRF, subscriptions, entry states and sync cursor",{
     const create=await app.inject({method:"POST",url:"/api/v1/feeds",headers:auth,payload:{url:"https://example.org/feed.xml",name:"Test feed"}});
     assert.equal(create.statusCode,201,create.body);
     const id=(create.json() as {id:string}).id;
+    const opml=await app.inject({method:"POST",url:"/api/v1/feeds/import",headers:auth,payload:{opml:'<opml version="2.0"><body><outline text="Hry"><outline text="Gaming" type="rss" xmlUrl="https://example.net/rss.xml"/></outline></body></opml>'}});
+    assert.equal(opml.statusCode,200,opml.body);
+    assert.equal((opml.json() as {imported:number}).imported,1,"OPML channel must be imported");
     const item=await pool.query<{id:string}>(`INSERT INTO entries(feed_id,guid,title,published_at) VALUES($1,'test-guid','Example entry',now()) RETURNING id`,[id]);
     const entryId=item.rows[0]!.id;
     const get=await app.inject({method:"GET",url:"/api/v1/entries",headers:{cookie:auth.cookie}});
