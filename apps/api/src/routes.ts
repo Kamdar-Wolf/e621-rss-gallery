@@ -35,6 +35,19 @@ export function apiRoutes(app:FastifyInstance) {
        WHERE s.user_id=$1 ORDER BY title ASC`,[user.id]);
     return {feeds:res.rows};
   });
+  app.get("/api/v1/feeds/export",async(req,reply)=>{
+    const user=await authenticated(req,reply);if(!user)return;
+    const result=await pool.query<{url:string;title:string}>(
+      `SELECT f.url,coalesce(s.title_override,f.title) AS title
+       FROM subscriptions s JOIN feeds f ON f.id=s.feed_id WHERE s.user_id=$1 ORDER BY title`,
+      [user.id]);
+    const esc=(value:string)=>value.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const items=result.rows.map(f=>'<outline type="rss" text="'+esc(f.title)+'" title="'+esc(f.title)+'" xmlUrl="'+esc(f.url)+'"/>').join("\n");
+    const xml='<?xml version="1.0" encoding="UTF-8"?>\n<opml version="2.0"><head><title>Kamdar Reader</title></head><body>'+items+'</body></opml>';
+    reply.type("application/xml; charset=utf-8");
+    reply.header("Content-Disposition",'attachment; filename="kamdar-feeds.opml"');
+    return reply.send(xml);
+  });
   app.post("/api/v1/feeds",async(req,reply)=>{
     const user=await authenticated(req,reply,true);if(!user)return;
     const body=req.body as FeedBody | null;
@@ -86,10 +99,10 @@ export function apiRoutes(app:FastifyInstance) {
     const res=await pool.query("DELETE FROM subscriptions WHERE user_id=$1 AND feed_id=$2 RETURNING feed_id",[user.id,req.params.id]);
     return {removed:!!res.rowCount};
   });
-  app.get<{Querystring:{feedId?:string;filter?:string;q?:string;before?:string;limit?:string}}>(
+  app.get<{Querystring:{feedId?:string;filter?:string;q?:string;cursor?:string;limit?:string;media?:string}}>(
     "/api/v1/entries",async(req,reply)=>{
       const user=await authenticated(req,reply);if(!user)return;
-      const {feedId,filter,q,before}=req.query;
+      const {feedId,filter,q,cursor,media}=req.query;
       if(feedId&&!uuid(feedId))return reply.code(400).send({error:"Invalid feedId"});
       const limit=Math.min(100,Math.max(1,Number.parseInt(req.query.limit||"40",10)||40));
       const cond=["s.user_id=$1"];
@@ -99,10 +112,19 @@ export function apiRoutes(app:FastifyInstance) {
       if(filter==="starred")cond.push("coalesce(es.is_starred,false)=true");
       if(filter==="saved")cond.push("coalesce(es.is_saved,false)=true");
       if(q?.trim()){args.push(q.trim().slice(0,200));cond.push(`to_tsvector('simple',coalesce(e.title,'')||' '||coalesce(e.summary,'')) @@ plainto_tsquery('simple',$${args.length})`);}
-      if(before){
-        const dt=new Date(before);
-        if(Number.isNaN(dt.getTime()))return reply.code(400).send({error:"Invalid before cursor"});
-        args.push(dt.toISOString());cond.push(`e.published_at < $${args.length}::timestamptz`);
+      if(media){
+        if(!["image","article","audio","video"].includes(media))return reply.code(400).send({error:"Invalid media type"});
+        args.push(media);
+        cond.push(`e.media_type=${args.length}`);
+      }
+      if(cursor){
+        let cursorData:{publishedAt:string;id:string};
+        try{
+          cursorData=JSON.parse(Buffer.from(cursor,"base64url").toString("utf8")) as typeof cursorData;
+          if(!cursorData||!uuid(cursorData.id)||Number.isNaN(Date.parse(cursorData.publishedAt)))throw Error();
+        }catch{return reply.code(400).send({error:"Invalid cursor"});}
+        args.push(new Date(cursorData.publishedAt).toISOString(),cursorData.id);
+        cond.push(`(e.published_at,e.id)<(${args.length-1}::timestamptz,${args.length}::uuid)`);
       }
       args.push(limit);
       const result=await pool.query(
@@ -116,7 +138,11 @@ export function apiRoutes(app:FastifyInstance) {
         LEFT JOIN entry_states es ON es.entry_id=e.id AND es.user_id=$1
         WHERE ${cond.join(" AND ")}
         ORDER BY e.published_at DESC,e.id DESC LIMIT $${args.length}`,args);
-      return {entries:result.rows,cursor:result.rows.length?result.rows[result.rows.length-1]?.published_at:null};
+      const last=result.rows[result.rows.length-1];
+      const nextCursor=(last && result.rows.length===limit)
+        ?Buffer.from(JSON.stringify({publishedAt:last.published_at,id:last.id}),"utf8").toString("base64url")
+        :null;
+      return {entries:result.rows,nextCursor};
     });
   app.patch<{Params:{id:string}}>("/api/v1/entries/:id/state",async(req,reply)=>{
     const user=await authenticated(req,reply,true);if(!user)return;
