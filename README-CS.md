@@ -2,6 +2,16 @@
 
 Tento projekt načítá oficiální Atom kanál e621, převádí ho do RSS 2.0 a stahuje **malé náhledy** na GitHub Pages, aby se obrázky zobrazovaly také v čtečkách, které neumí načítat obrázky přímo z e621.
 
+## Nová čtečka Kamdar Reader (beta)
+
+**Otevřít:** https://kamdar-wolf.github.io/e621-rss-gallery/reader/
+
+Jde o první funkční verzi samostatné RSS čtečky. Nabízí galerii, karty a seznam; vyhledávání mezi načtenými články; označení přečteno, oblíbené, číst později; vlastní štítky/poznámky; filtrování podle médií a klíčových slov; zálohy/obnovu a import/export OPML. Má responzivní rozhraní, světlé/tmavé téma a PWA podporu pro offline uložený obsah.
+
+**Omezení beta verze:** Aplikace používá lokální úložiště prohlížeče, takže stav není synchronizovaný mezi zařízeními. Importované externí RSS/Atom kanály mohou být blokované prohlížečovou politikou CORS; nejde zatím o skutečnou serverovou agregaci libovolného množství zdrojů. Plná kompatibilita s Inoreader/Folo bude vyžadovat autentizovaný backend, databázi a pozdější fáze vývoje.
+
+**Rozbor konkurence a plán dalších funkcí:** [READER_ARCHITECTURE.md](READER_ARCHITECTURE.md).
+
 ## Nejdůležitější: změna sledovaných značek
 
 **Jediný soubor, který je potřeba při změně sledovaných autorů či tagů upravovat, je [tags.txt](https://github.com/Kamdar-Wolf/e621-rss-gallery/blob/main/tags.txt).**
