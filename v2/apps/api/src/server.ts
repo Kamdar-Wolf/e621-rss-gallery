@@ -34,7 +34,7 @@ export function buildApp(pool: pg.Pool, apiToken: string) {
 
   app.get("/v1/feeds", async () => {
     const {rows}=await pool.query(
-      `SELECT f.id,f.title,f.canonical_url AS url,f.last_success_at,f.last_error,
+      `SELECT f.id,f.title,f.canonical_url AS url,f.last_success_at,f.last_error,f.next_poll_at,f.last_checked_at,f.last_http_status,f.failure_count,
               s.folder_id,COALESCE(s.title_override,f.title) AS display_title
          FROM subscriptions s JOIN feeds f ON s.feed_id=f.id
         WHERE s.user_id=$1 ORDER BY display_title ASC`,[OWNER_ID]
@@ -71,23 +71,64 @@ export function buildApp(pool: pg.Pool, apiToken: string) {
     finally{client.release();}
   });
 
+  app.post("/v1/feeds/:id/refresh", async (req,reply) => {
+    const id=(req.params as {id:string}).id;
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))
+      return reply.code(400).send({error:"Invalid feed id"});
+    const {rows}=await pool.query(
+      `UPDATE feeds SET next_poll_at=NOW() WHERE id=$1
+        AND EXISTS(SELECT 1 FROM subscriptions WHERE user_id=$2 AND feed_id=$1)
+        RETURNING id,next_poll_at`,[id,OWNER_ID]);
+    if(!rows.length)return reply.code(404).send({error:"Feed not subscribed"});
+    return reply.code(202).send({queued:true,feed:rows[0]});
+  });
+
+  app.delete("/v1/feeds/:id", async (req,reply) => {
+    const id=(req.params as {id:string}).id;
+    if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))
+      return reply.code(400).send({error:"Invalid feed id"});
+    const {rowCount}=await pool.query(
+      "DELETE FROM subscriptions WHERE user_id=$1 AND feed_id=$2",[OWNER_ID,id]);
+    if(!rowCount)return reply.code(404).send({error:"Feed not subscribed"});
+    return reply.code(204).send();
+  });
+
+  app.get("/v1/stats", async () => {
+    const {rows}=await pool.query(
+      `SELECT
+        (SELECT COUNT(*)::int FROM subscriptions WHERE user_id=$1) AS subscriptions,
+        COUNT(*)::int AS entries,
+        COUNT(*) FILTER(WHERE es.read_at IS NULL)::int AS unread,
+        COUNT(*) FILTER(WHERE es.starred_at IS NOT NULL)::int AS starred,
+        COUNT(*) FILTER(WHERE es.saved_at IS NOT NULL)::int AS saved
+        FROM entries e
+        JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1
+        LEFT JOIN entry_states es ON es.user_id=$1 AND es.entry_id=e.id`,
+      [OWNER_ID]
+    );
+    return rows[0];
+  });
+
   app.get("/v1/entries", async (req,reply) => {
     const args=cursorSchema.safeParse(req.query);
     if(!args.success)return reply.code(400).send({error:"Invalid query"});
-    const {limit,before,feedId}=args.data;
+    const {limit,before,beforeId,feedId}=args.data;
     const {rows}=await pool.query(
-      `SELECT e.id,e.feed_id,e.source_url,e.title,e.author,e.summary,e.media_type,e.published_at,
+      `SELECT e.id,e.feed_id,e.source_url,e.title,e.author,e.summary,e.media_type,e.published_at,e.created_at,
               es.read_at,es.starred_at,es.saved_at,
               (SELECT m.source_url FROM entry_media m WHERE m.entry_id=e.id
                  ORDER BY m.position ASC LIMIT 1) AS thumbnail
          FROM entries e JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1
          LEFT JOIN entry_states es ON es.entry_id=e.id AND es.user_id=$1
         WHERE ($2::uuid IS NULL OR e.feed_id=$2::uuid)
-          AND ($3::timestamptz IS NULL OR e.published_at<$3::timestamptz)
-        ORDER BY e.published_at DESC NULLS LAST,e.id DESC LIMIT $4`,
-      [OWNER_ID,feedId||null,before||null,limit]
+          AND ($3::timestamptz IS NULL OR
+            (COALESCE(e.published_at,e.created_at),e.id)<($3::timestamptz,$4::uuid))
+        ORDER BY COALESCE(e.published_at,e.created_at) DESC,e.id DESC LIMIT $5`,
+      [OWNER_ID,feedId||null,before||null,beforeId||null,limit]
     );
-    return {items:rows,nextCursor:rows.length===limit?rows.at(-1)?.published_at:null};
+    const last=rows.at(-1);
+    return {items:rows,nextCursor:rows.length===limit&&last?
+      {before:last.published_at||last.created_at,beforeId:last.id}:null};
   });
 
   app.patch("/v1/entries/:id/state", async (req,reply) => {

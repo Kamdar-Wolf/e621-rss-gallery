@@ -12,9 +12,11 @@ export const entryStateSchema = z.object({
 }).strict().refine(value => Object.keys(value).length > 0, "At least one state must be supplied");
 export const cursorSchema = z.object({
   before: z.iso.datetime({ offset: true }).optional(),
+  beforeId: z.uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
   feedId: z.uuid().optional()
-});
+}).refine(x=>Boolean(x.before)===Boolean(x.beforeId),
+  "before and beforeId must be supplied together");
 export type AddFeedInput = z.infer<typeof addFeedSchema>;
 export type EntryStateInput = z.infer<typeof entryStateSchema>;
 

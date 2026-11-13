@@ -35,12 +35,24 @@ test("authenticated feed is persisted and listed; cannot duplicate subscription"
   const list=await app.inject({method:"GET",url:"/v1/feeds",headers:auth});
   assert.equal(list.statusCode,200,list.body);
   assert.equal(list.json().items.filter((f:{url:string})=>f.url===url).length,1);
+  const item=list.json().items.find((f:{url:string})=>f.url===url);
+  assert.ok(item.id);
+  const refresh=await app.inject({method:"POST",url:"/v1/feeds/"+item.id+"/refresh",headers:auth});
+  assert.equal(refresh.statusCode,202,refresh.body);
+  const stats=await app.inject({method:"GET",url:"/v1/stats",headers:auth});
+  assert.equal(stats.statusCode,200);
+  assert.ok(stats.json().subscriptions>=1);
+  const del=await app.inject({method:"DELETE",url:"/v1/feeds/"+item.id,headers:auth});
+  assert.equal(del.statusCode,204);
+  const listAfter=await app.inject({method:"GET",url:"/v1/feeds",headers:auth});
+  assert.equal(listAfter.json().items.filter((f:{url:string})=>f.url===url).length,0);
 });
 test("entry listing obeys limits and accepts an empty result",async()=>{
   const result=await app.inject({method:"GET",url:"/v1/entries?limit=20",headers:auth});
   assert.equal(result.statusCode,200,result.body);
   assert.equal(Array.isArray(result.json().items),true);
   assert.equal((await app.inject({method:"GET",url:"/v1/entries?limit=999",headers:auth})).statusCode,400);
+  assert.equal((await app.inject({method:"GET",url:"/v1/entries?before=2026-11-13T12%3A00%3A00Z",headers:auth})).statusCode,400);
 });
 test("state endpoint returns 404 for missing entry",async()=>{
   const result=await app.inject({method:"PATCH",url:"/v1/entries/"+randomUUID()+"/state",
