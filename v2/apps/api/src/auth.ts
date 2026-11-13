@@ -66,7 +66,8 @@ export type AuthConfig={
   devOwnerId?:string;
 };
 export function configureAuth(app:FastifyInstance,pool:pg.Pool,config:AuthConfig){
-  if(config.sessionSecret.length<32)throw Error("READER_SESSION_SECRET requires at least 32 characters");
+  if(config.sessionSecret.length<32||config.sessionSecret.includes("REPLACE_WITH_RANDOM"))
+    throw Error("READER_SESSION_SECRET must be a random secret of at least 32 characters");
   const targetOrigin=new URL(config.origin).origin;
   const secure=targetOrigin.startsWith("https://");
   if(!secure && !["http://127.0.0.1:5173","http://localhost:5173","http://127.0.0.1:3100"]

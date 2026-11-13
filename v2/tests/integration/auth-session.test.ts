@@ -16,7 +16,7 @@ const feedId=randomUUID();
 let sessionA:{cookie:string;csrf:string};
 let sessionB:{cookie:string;csrf:string};
 
-function sessionCookie(reply: {headers:Record<string,string|string[]|undefined>}):string{
+function sessionCookie(reply: {headers:Record<string,unknown>}):string{
   return String(reply.headers["set-cookie"]||"").split(";")[0];
 }
 async function login(username:string){

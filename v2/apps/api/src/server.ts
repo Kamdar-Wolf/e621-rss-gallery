@@ -16,7 +16,7 @@ export function buildApp(pool: pg.Pool, devToken?: string) {
     origin:process.env.APP_ORIGIN||"http://127.0.0.1:5173",
     allowDevToken:process.env.ALLOW_DEV_TOKEN==="true",
     devToken,
-    devOwnerId:process.env.READER_req.readerUserId!
+    devOwnerId:process.env.READER_OWNER_ID
   });
   app.get("/health", async () => ({status:"ok",service:"kamdar-reader-api",version:"0.2.0-alpha.1"}));
   app.get("/ready", async (_req,reply) => {
