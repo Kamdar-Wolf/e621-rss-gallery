@@ -1,23 +1,44 @@
-# e621 RSS s náhledy – návod
+# e621 RSS galerie – správa a návod
 
-Tato sada převádí původní kanál e621 `/posts.atom` na RSS 2.0 se značkami `media:thumbnail` a `enclosure`. Obrázky **nestahuje ani neukládá** na GitHub; jsou to odkazy na e621.
+Tento projekt načítá oficiální Atom kanál e621, převádí ho do RSS 2.0 a stahuje **malé náhledy** na GitHub Pages, aby se obrázky zobrazovaly také v čtečkách, které neumí načítat obrázky přímo z e621.
 
-## Instalace přes GitHub
+## Nejdůležitější: změna sledovaných značek
 
-1. Na GitHubu vytvoř nové **veřejné** úložiště `e621-rss-gallery` (nepoužívej existující úložiště se skripty).
-2. Nahraj obsah rozbaleného ZIPu do kořene úložiště. Důležité: podsložka `.github/workflows/` musí být skutečně zachována. Pokud GitHub při nahrávání složky neudrží, vytvoř soubor `.github/workflows/publish.yml` ručně přes **Add file → Create new file** a vlož obsah souboru z balíčku. Dále je potřeba nahrát `build_feed.py` a `public/index.html`.
-3. V **Settings → Pages → Build and deployment → Source** zvol `GitHub Actions`.
-4. V **Actions → Publish e621 RSS with image previews → Run workflow** spusť první běh.
-5. Pokud skončí zeleným zaškrtnutím, otevři `https://UZIVATEL.github.io/e621-rss-gallery/feed.xml` (nahraď UZIVATEL svým uživatelským jménem) a vlož tuto adresu do Folo nebo Inoreaderu.
+**Jediný soubor, který je potřeba při změně sledovaných autorů či tagů upravovat, je [tags.txt](https://github.com/Kamdar-Wolf/e621-rss-gallery/blob/main/tags.txt).**
 
-## Diagnostika
+1. Otevři soubor **tags.txt** a klikni na ikonu tužky (**Edit this file**).
+2. **Přidání:** vlož nový řádek, například `~novy_autor`.
+3. **Odebrání:** smaž celý řádek s příslušnou značkou.
+4. Klikni na **Commit changes** a potvrď uložení do větve `main`.
+5. GitHub Actions automaticky spustí aktualizaci RSS a obrazových náhledů. Průběh najdeš v [Actions](https://github.com/Kamdar-Wolf/e621-rss-gallery/actions).
 
-- Pokud běh selže na `HTTP Error 403`, e621 blokuje i GitHub Actions a není vhodné to dál obcházet výměnou `User-Agent`. Stejný generátor lze spustit na vlastním PC a výstup veřejně publikovat. Přístup počítače k API přes prohlížeč ale zatím neprokazuje přístup z Pythonu.
-- Pokud skript vypíše `NO embedded images`, e621 změnilo formát obsahu Atom a je potřeba upravit parsování, než RSS vydáme.
-- Veřejné úložiště i jeho seznam značek může vidět kdokoli. Použití GitHub Pages podléhá pravidlům pro obsah, včetně materiálu pro dospělé.
-- GitHub může plánovanou úlohu ve veřejném úložišti vypnout po 60 dnech nečinnosti. V tom případě je nutné ji znovu povolit nebo aktualizovat úložiště.
-- Automatický běh je plánován jednou za hodinu (17. minuta UTC), může se zpozdit.
+**Neměň soubory `build_feed.py`, `cache_previews.py` ani `feed.xml` jen kvůli seznamu značek.**
 
-## Záložní řešení
+Pravidla pro `tags.txt`:
+- Každá značka je na **samostatném řádku**.
+- `~` znamená logické **OR** (příspěvek může odpovídat kterékoli uvedené značce).
+- Ponech u alternativních značek prefix `~`.
+- Prázdné řádky a komentáře začínající `#` se ignorují.
+- Nejvýše 40 různých značek v této konfiguraci; duplicity se automaticky ignorují.
+- Do souboru patří značky, nikoli celá webová adresa.
 
-Pokud selže přístup z GitHub Actions, použij generátor na Windows a publikuj `public/feed.xml` přes zvolený hosting; nezaručujeme funkci konkrétního klienta, dokud se neověří načítání náhledů na straně RSS čtečky.
+## Kde se vytváří RSS
+
+1. `tags.txt`: pouze seznam sledovaných značek.
+2. `build_feed.py`: načte seznam z `tags.txt`, sestaví adresu `https://e621.net/posts.atom?tags=...` a vytvoří `public/feed.xml`.
+3. `cache_previews.py`: stáhne malé náhledy, vloží je do `public/thumbs/` a přepíše adresy obrázků v `public/feed.xml`, aby mířily na GitHub Pages.
+4. `.github/workflows/publish.yml`: automatické spouštění a publikování.
+5. `public/index.html`: webová galerie.
+
+## Výsledné adresy
+
+- **Galerie:** https://kamdar-wolf.github.io/e621-rss-gallery/
+- **RSS pro Folo nebo Inoreader:** https://kamdar-wolf.github.io/e621-rss-gallery/feed.xml
+
+## Aktualizace a kontrola
+
+GitHub Actions se spouští po změnách ve větvi `main`, ručně a podle plánu přibližně jednou za hodinu (17. minuta UTC). Plán se může opozdit. Po změně `tags.txt` stačí počkat na úspěšné dokončení běhu **Publish e621 RSS with image previews**.
+
+Chyby (například HTTP 403 e621, chybějící náhledy nebo selhání publikování) kontroluj v záložce Actions. Při nulovém počtu dostupných obrázků skript odmítne publikovat prázdnou galerii.
+
+**Soukromí a pravidla hostingu:** úložiště je veřejné. Každý může číst seznam značek a zobrazit publikované náhledy. Provoz podléhá pravidlům GitHub Pages a autorským právům autorů. Pokud jsou publikované náhledy explicitní nebo jinak nepřípustné, je třeba pro ně zvolit vhodný hosting.
