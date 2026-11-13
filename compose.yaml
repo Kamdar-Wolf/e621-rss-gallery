@@ -1,0 +1,58 @@
+name: kamdar-reader-v2
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-reader}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-reader}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-reader} -d ${POSTGRES_DB:-reader}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [internal]
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    networks: [internal]
+  api:
+    build: {context: ., dockerfile: apps/api/Dockerfile}
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [internal]
+    ports: ["127.0.0.1:3000:3000"]
+  worker:
+    build: {context: ., dockerfile: apps/api/Dockerfile}
+    command: ["node", "apps/api/dist/worker.js"]
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [internal]
+  web:
+    build: {context: ., dockerfile: apps/web/Dockerfile.dev}
+    restart: unless-stopped
+    depends_on: [api]
+    networks: [internal]
+    ports: ["127.0.0.1:5173:5173"]
+volumes:
+  postgres_data:
+  redis_data:
+networks:
+  internal:
+    driver: bridge
