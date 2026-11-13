@@ -12,7 +12,7 @@ function uuid(s: unknown): s is string {
 function first<T>(x:T|T[]):T{return Array.isArray(x)?x[0]!:x;}
 function collectOpml(xml:string): Array<{url:string;name:string}> {
   if(xml.length>1_000_000 || XMLValidator.validate(xml)!==true)throw new Error("Invalid OPML XML");
-  const parsed=new XMLParser({ignoreAttributes:false,attributeNamePrefix:"@",processEntities:false}).parse(xml);
+  const parsed=new XMLParser({ignoreAttributes:false,attributeNamePrefix:"@_",processEntities:false}).parse(xml);
   const found: Array<{url:string;name:string}>=[];
   const walk=(node:unknown,level=0)=>{
     if(level>15||!node||typeof node!=="object")return;
