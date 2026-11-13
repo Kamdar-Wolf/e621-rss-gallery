@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#111827">
+  <meta name="description" content="Kamdar Reader — soukromě ovládaná RSS čtečka s galerií obrázků, filtry a importem OPML.">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./reader.css">
+  <title>Kamdar Reader — RSS čtečka</title>
+</head>
+<body data-theme="dark">
+<div class="app" id="app">
+  <aside class="sidebar" id="sidebar" aria-label="Navigace">
+    <div class="brand">
+      <a class="brand-icon" href="./" title="Kamdar Reader">K<span>·</span></a>
+      <div class="brand-text"><strong>Kamdar Reader</strong><small>RSS Studio <span class="version">β 0.1</span></small></div>
+      <button id="sidebarClose" class="icon-button sidebar-close" aria-label="Zavřít nabídku">×</button>
+    </div>
+    <div class="sidebar-body">
+      <div class="section-caption">KNIHOVNA</div>
+      <nav class="nav" aria-label="Přehled">
+        <button data-section="all" class="nav-item selected"><span class="nav-symbol">◫</span><span>Všechny příspěvky</span><span class="count" id="allCount">—</span></button>
+        <button data-section="unread" class="nav-item"><span class="nav-symbol">◌</span><span>Nepřečtené</span><span class="count" id="unreadCount">—</span></button>
+        <button data-section="starred" class="nav-item"><span class="nav-symbol">☆</span><span>Oblíbené</span><span class="count" id="starCount">0</span></button>
+        <button data-section="saved" class="nav-item"><span class="nav-symbol">▤</span><span>Číst později</span><span class="count" id="savedCount">0</span></button>
+      </nav>
+      <div class="section-heading"><span>ZDROJE</span><button id="addFeedSidebar" class="mini-add" title="Přidat zdroj" aria-label="Přidat zdroj">+</button></div>
+      <div id="feedTree" class="feed-tree"></div>
+      <div class="side-hint"><span class="status-dot"></span><span id="syncHint">Data načtená z RSS. Stav čtení jen v tomto prohlížeči.</span></div>
+    </div>
+    <footer class="sidebar-footer">
+      <a href="../" class="footer-link" title="Původní galerie e621">▦ <span>Původní galerie</span></a>
+      <button id="settingsOpen" class="footer-link">⚙ <span>Nastavení</span></button>
+    </footer>
+  </aside>
+  <div class="sidebar-mask" id="sidebarMask"></div>
+  <main class="workspace">
+    <header class="topbar">
+      <div class="search-wrap">
+        <button id="menuToggle" class="icon-button menu-toggle" aria-label="Otevřít nabídku">☰</button>
+        <span class="search-icon" aria-hidden="true">⌕</span>
+        <input type="search" id="searchInput" autocomplete="off" placeholder="Hledat mezi načtenými příspěvky…" aria-label="Hledat">
+        <kbd class="search-kbd">/</kbd>
+      </div>
+      <div class="top-actions">
+        <span id="lastSync" class="last-sync" title="Poslední načtení RSS"></span>
+        <button id="refreshButton" class="icon-button" title="Aktualizovat vybraný zdroj" aria-label="Aktualizovat">↻</button>
+        <button id="openAddFeed" class="action-button">+ <span>Přidat zdroj</span></button>
+        <button id="settingsTop" class="icon-button settings-top" title="Nastavení" aria-label="Nastavení">⚙</button>
+      </div>
+    </header>
+    <div class="workspace-content">
+      <section class="page-heading">
+        <div><p class="eyebrow" id="eyebrow">OSOBNÍ PŘEHLED</p><h1 id="viewTitle">Všechny příspěvky</h1><p id="viewSubtitle" class="subtitle">Příspěvky z dostupných RSS kanálů</p></div>
+        <div class="heading-actions"><button id="markAllRead" class="subtle-button">✓ Označit zobrazené jako přečtené</button></div>
+      </section>
+      <div class="filterbar">
+        <div class="view-switch" role="group" aria-label="Režim zobrazení">
+          <button data-layout="gallery" class="active" title="Obrázková galerie">▦ <span>Galerie</span></button>
+          <button data-layout="cards" title="Karty">▤ <span>Karty</span></button>
+          <button data-layout="list" title="Seznam">≡ <span>Seznam</span></button>
+        </div>
+        <div class="filters-right">
+          <select id="mediaFilter" aria-label="Typ obsahu">
+            <option value="all">Veškerý obsah</option>
+            <option value="image">Obrázky</option>
+            <option value="article">Články</option>
+            <option value="audio">Audio</option>
+            <option value="video">Video</option>
+          </select>
+          <select id="sortSelect" aria-label="Řazení"><option value="newest">Nejnovější</option><option value="oldest">Nejstarší</option><option value="title">Podle názvu</option></select>
+        </div>
+      </div>
+      <div class="content-meta"><span id="resultsCount" aria-live="polite">Načítám příspěvky…</span><span id="feedAlert"></span></div>
+      <div id="items" class="entries gallery" aria-live="polite"></div>
+      <div id="emptyState" class="empty-state" hidden><div class="empty-icon">⌕</div><h2>Žádné odpovídající příspěvky</h2><p id="emptyDescription">Uprav vyhledávání nebo filtr.</p><button id="clearFilters" class="action-button">Vymazat filtry</button></div>
+      <div class="loadmore"><button id="loadMore" class="subtle-button" hidden>Načíst další příspěvky ↓</button></div>
+    </div>
+  </main>
+</div>
+
+<div class="overlay" id="readerOverlay" hidden></div>
+<aside id="readerPanel" class="reader-panel" role="dialog" aria-modal="true" aria-label="Detail příspěvku" aria-hidden="true">
+  <div class="reader-toolbar">
+    <button id="readerClose" class="icon-button" aria-label="Zavřít detail">×</button>
+    <span id="readerOrigin" class="reader-origin">Příspěvek</span>
+    <div class="reader-actions">
+      <button id="readerStar" class="icon-button" title="Přidat do oblíbených">☆</button>
+      <button id="readerSave" class="icon-button" title="Uložit na později">▤</button>
+      <button id="readerRead" class="icon-button" title="Přepnout přečteno">◌</button>
+    </div>
+  </div>
+  <div class="reader-scroll">
+    <div class="reader-kicker" id="readerDate"></div><h2 id="readerTitle"></h2>
+    <div class="reader-image-wrap" id="readerImageWrap"><img id="readerImage" alt="" loading="lazy"></div>
+    <div class="reader-body" id="readerBody"></div>
+    <div class="reader-details">
+      <label for="readerNote">Soukromá poznámka</label><textarea id="readerNote" placeholder="Poznámka zůstane uložená v tomto prohlížeči." rows="3"></textarea>
+      <label for="readerLabels">Štítky (odděl čárkou)</label><input id="readerLabels" type="text" placeholder="např. inspirace, přečíst">
+    </div>
+    <div class="reader-links">
+      <a id="readerOriginal" class="action-button" target="_blank" rel="noopener noreferrer">Otevřít původní příspěvek ↗</a>
+      <button id="copyArticle" class="subtle-button">Kopírovat odkaz</button>
+    </div>
+  </div>
+</aside>
+
+<dialog id="settingsDialog" class="modal">
+  <div class="modal-heading"><div><p class="eyebrow">PŘIZPŮSOBENÍ</p><h2>Nastavení čtečky</h2></div><button class="icon-button dialog-close" data-close="settingsDialog" aria-label="Zavřít">×</button></div>
+  <div class="settings-grid">
+    <label>Téma<select id="themeSelect"><option value="dark">Tmavé</option><option value="light">Světlé</option><option value="system">Podle systému</option></select></label>
+    <label>Po otevření příspěvku<select id="autoReadSelect"><option value="yes">Označit jako přečtený</option><option value="no">Ponechat nepřečtený</option></select></label>
+    <label>Výchozí zobrazení<select id="defaultLayout"><option value="gallery">Galerie</option><option value="cards">Karty</option><option value="list">Seznam</option></select></label>
+    <label>Klíčová slova k vyloučení<textarea id="blockedWords" rows="3" placeholder="Jedno slovo nebo fráze na řádek"></textarea></label>
+    <label>Zvýrazněná slova<textarea id="highlightWords" rows="3" placeholder="Jedno slovo nebo fráze na řádek"></textarea></label>
+  </div>
+  <div class="modal-section"><h3>Import, export a záloha</h3><div class="button-row"><button id="importOPML" class="subtle-button">Importovat OPML</button><button id="exportOPML" class="subtle-button">Exportovat OPML</button><button id="exportBackup" class="subtle-button">Zálohovat nastavení a články</button><button id="importBackup" class="subtle-button">Obnovit zálohu</button></div><p class="help">Lokální stav není synchronizovaný mezi zařízeními. OPML importuje seznam zdrojů; načtení cizích kanálů může omezovat CORS, dokud nebude zprovozněn serverový agregátor.</p></div>
+  <div class="modal-section"><h3>Správa e621</h3><p class="help">Značky e621 se upravují v GitHubu, nikoli v této čtečce.</p><a target="_blank" rel="noopener noreferrer" href="https://github.com/Kamdar-Wolf/e621-rss-gallery/edit/main/tags.txt">Upravit sledované značky ↗</a></div>
+  <div class="modal-footer"><button id="shortcutsOpen" class="subtle-button">Klávesové zkratky</button><button id="settingsSave" class="action-button">Uložit nastavení</button></div>
+</dialog>
+
+<dialog id="feedDialog" class="modal compact-modal">
+  <div class="modal-heading"><div><p class="eyebrow">ODBĚRY</p><h2>Přidat RSS zdroj</h2></div><button class="icon-button dialog-close" data-close="feedDialog" aria-label="Zavřít">×</button></div>
+  <label>Adresa RSS / Atom kanálu<input id="newFeedUrl" type="url" placeholder="https://example.com/feed.xml"></label>
+  <label>Název zdroje<input id="newFeedName" type="text" placeholder="Nepovinné"></label>
+  <label>Složka<input id="newFeedGroup" type="text" placeholder="Např. Technologie"></label>
+  <p class="help">Přidané zdroje se ukládají pouze v tomto prohlížeči. Zdroje mimo naši doménu se přímo načtou jen tehdy, když jejich server povoluje CORS.</p>
+  <div class="modal-footer"><button id="feedImportOPML" class="subtle-button">Importovat OPML</button><button id="feedAddConfirm" class="action-button">Přidat zdroj</button></div>
+</dialog>
+
+<dialog id="shortcutsDialog" class="modal compact-modal">
+  <div class="modal-heading"><div><h2>Klávesové zkratky</h2></div><button class="icon-button dialog-close" data-close="shortcutsDialog">×</button></div>
+  <div class="shortcut-grid"><span>Další / předchozí příspěvek</span><kbd>j</kbd><kbd>k</kbd><span>Otevřít detail</span><kbd>Enter</kbd><span></span><span>Označit přečteno</span><kbd>m</kbd><span></span><span>Oblíbené</span><kbd>s</kbd><span></span><span>Číst později</span><kbd>b</kbd><span></span><span>Hledání</span><kbd>/</kbd><span></span><span>Zavřít panel</span><kbd>Esc</kbd><span></span></div>
+</dialog>
+<input type="file" id="opmlFile" accept=".opml,.xml,text/xml,application/xml" hidden>
+<input type="file" id="backupFile" accept=".json,application/json" hidden>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script type="module" src="./reader.js"></script>
+</body>
+</html>
