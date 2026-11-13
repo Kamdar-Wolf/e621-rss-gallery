@@ -53,3 +53,6 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .more-area{display:flex;justify-content:center;margin:34px 0 5px}
 .import-area .secondary{margin:6px 0}
 @media(max-width:600px){.filter-controls{gap:7px}.media-filter{max-width:135px;padding:8px;font-size:11px}}
+
+/* Visual QA: 390px viewport overflow fix */
+@media(max-width:540px){.topbar .search{min-width:0;flex:1}.topbar .top-buttons{flex-shrink:0}.content-tools .results{display:none}}
