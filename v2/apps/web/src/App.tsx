@@ -1,6 +1,7 @@
 import {useCallback,useEffect,useMemo,useRef,useState, type ChangeEvent, type FormEvent} from "react";
 import {api,ApiError,type AuthSession,type SyncPage,type Feed,type Entry,type EntryPage,type Cursor,type Stats} from "./api.js";
 import {cacheSnapshot,clearOfflineUser,flushChanges,getChanges,getSnapshot,overlayChanges,
+  getCachePreference,setCachePreference,
   queueChange,resolveConflict,type QueuedChange,type OfflineField,type RemoteState} from "./offline.js";
 
 type FolderView="all"|"unread"|"starred"|"saved";
@@ -52,6 +53,7 @@ export function App(){
   const currentUser=useRef("");
   const flushing=useRef(false);
   const [offline,setOffline]=useState(false);
+  const [cacheAllowed,setCacheAllowed]=useState(false);
   const [queueItems,setQueueItems]=useState<QueuedChange[]>([]);
   const [token,setToken]=useState("");
   const [loading,setLoading]=useState(false);
@@ -244,6 +246,15 @@ export function App(){
   },[feedId,load,refreshQueue]);
 
   useEffect(()=>{
+    if(!userId){setCacheAllowed(false);return;}
+    let active=true;
+    void getCachePreference(userId).then(enabled=>{
+      if(active)setCacheAllowed(enabled);
+    }).catch(()=>{if(active)setCacheAllowed(false);});
+    return()=>{active=false;};
+  },[userId]);
+
+  useEffect(()=>{
     if(!token||!userId)return;
     void refreshQueue(userId);
     const refresh=()=>{
@@ -354,7 +365,7 @@ export function App(){
       await api(token,"/v1/auth/logout",{method:"POST"});
       if(user)await clearOfflineUser(user);
       currentUser.current="";setUserId("");setToken("");setSessionUser("");
-      setEntries([]);setFeeds([]);setQueueItems([]);setOffline(false);
+      setEntries([]);setFeeds([]);setQueueItems([]);setOffline(false);setCacheAllowed(false);
       syncCursor.current={after:new Date(Date.now()-60_000).toISOString(),
         afterId:"00000000-0000-0000-0000-000000000000"};
     }catch(error){
@@ -401,11 +412,31 @@ export function App(){
       else void load(token,feedId);
     }catch(error){setError(error instanceof Error?error.message:"Řešení konfliktu selhalo");}
   }
+  async function toggleArticleCache(){
+    const user=currentUser.current;
+    if(!user)return;
+    const turnOn=!cacheAllowed;
+    if(turnOn && !window.confirm(
+      "Ukládat názvy zdrojů, URL a texty článků do tohoto prohlížeče? "+
+      "Údaje nejsou šifrované. Na sdíleném zařízení funkci nezapínej."))return;
+    try{
+      await setCachePreference(user,turnOn);
+      setCacheAllowed(turnOn);
+      if(turnOn){
+        await load(token,feedId);
+        setNotice("Offline kopie zapnuta. Texty dostupné v otevřené přihlášené kartě.");
+      }else{
+        setNotice("Offline kopie článků odstraněna. Neodeslané změny zůstávají ve frontě.");
+      }
+    }catch(error){
+      setError(error instanceof Error?error.message:"Nastavení offline kopie selhalo");
+    }
+  }
   async function wipeLocalCache(){
     const user=currentUser.current;
     if(!user||!window.confirm("Opravdu smazat offline články a všechny čekající změny tohoto účtu?"))return;
     try{
-      await clearOfflineUser(user);setQueueItems([]);
+      await clearOfflineUser(user);setQueueItems([]);setCacheAllowed(false);
       setNotice("Lokální offline data byla smazána.");
     }catch(error){setError(error instanceof Error?error.message:"Smazání offline dat selhalo");}
   }
@@ -565,7 +596,12 @@ export function App(){
         {error?<div role="alert" className="alert error">{error}</div>:null}
         {notice?<div role="status" className="alert success">{notice}</div>:null}
         <div className={"offline-status "+(offline?"is-offline":"")}>
-          <span>{offline?"Offline: naposledy uložené články":"Online synchronizace"}</span>
+          <span>{offline?"Offline: naposledy uložené články":"Online synchronizace"} ·
+            {cacheAllowed?" kopie článků zapnuta":" kopie článků vypnuta"}</span>
+          <button type="button" aria-pressed={cacheAllowed}
+            title="Lokální texty a URL nejsou šifrované"
+            onClick={()=>void toggleArticleCache()}>
+            {cacheAllowed?"Vypnout offline články":"Zapnout offline články"}</button>
           <strong>Čeká na odeslání: {pendingCount}</strong>
           {conflictCount?<strong className="offline-conflict">{conflictCount} konfliktů</strong>:null}
           <button type="button" onClick={()=>void flushOffline(token,userId)}>Synchronizovat</button>

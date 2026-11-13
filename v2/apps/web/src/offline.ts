@@ -1,7 +1,7 @@
 import type {Entry,Feed,Stats} from "./api.js";
 
 const DB_NAME="kamdar-reader-offline";
-const DB_VERSION=1;
+const DB_VERSION=2;
 const CACHE_LIMIT=500;
 const OP_LIMIT=1500;
 
@@ -9,6 +9,8 @@ export type OfflineField="read"|"starred"|"saved";
 export type OfflineState="pending"|"conflict";
 export interface QueuedChange {
   id:string;userId:string;entryId:string;field:OfflineField;
+  generation?:number;
+  inFlight?:boolean;
   desired:boolean;baseValue:boolean;expectedRevision:number;
   createdAt:number;updatedAt:number;status:OfflineState;
   remoteRevision?:number;remoteValue?:boolean;
@@ -37,10 +39,16 @@ function openDB():Promise<IDBDatabase>{
         reject(new Error("IndexedDB není v tomto prohlížeči k dispozici"));return;
       }
       const req=indexedDB.open(DB_NAME,DB_VERSION);
-      req.onupgradeneeded=()=>{
+      req.onupgradeneeded=(event:IDBVersionChangeEvent)=>{
         const db=req.result;
         if(!db.objectStoreNames.contains("snapshots"))
           db.createObjectStore("snapshots",{keyPath:"userId"});
+        // The old development build cached personal feed URLs without opt-in.
+        // Wipe those legacy snapshots during the privacy migration.
+        if(req.transaction && event.oldVersion<2)
+          req.transaction.objectStore("snapshots").clear();
+        if(!db.objectStoreNames.contains("prefs"))
+          db.createObjectStore("prefs",{keyPath:"userId"});
         if(!db.objectStoreNames.contains("queue")){
           const store=db.createObjectStore("queue",{keyPath:"id"});
           store.createIndex("byUser","userId",{unique:false});
@@ -88,8 +96,29 @@ export async function getSnapshot(userId:string):Promise<OfflineSnapshot|null>{
     req.onerror=()=>reject(req.error);
   });
 }
+/** Plaintext article storage is disabled until the user explicitly opts in. */
+export async function getCachePreference(userId:string):Promise<boolean>{
+  validUser(userId);
+  const db=await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction("prefs","readonly");
+    const req=tx.objectStore("prefs").get(userId);
+    req.onsuccess=()=>resolve(req.result?.enabled===true);
+    req.onerror=()=>reject(req.error);
+  });
+}
+export async function setCachePreference(userId:string,enabled:boolean):Promise<void>{
+  validUser(userId);
+  const db=await openDB();
+  const tx=db.transaction(["prefs","snapshots"],"readwrite");
+  const done=finished(tx);
+  tx.objectStore("prefs").put({userId,enabled});
+  if(!enabled)tx.objectStore("snapshots").delete(userId);
+  await done;
+}
 export async function cacheSnapshot(userId:string,feeds:Feed[],entries:Entry[],stats:Stats):Promise<void>{
   validUser(userId);
+  if(!(await getCachePreference(userId)))return;
   const db=await openDB();
   const tx=db.transaction("snapshots","readwrite");
   const end=finished(tx);
@@ -141,24 +170,50 @@ export async function queueChange(userId:string,entry:Entry,field:OfflineField,d
   const done=finished(tx);
   const store=tx.objectStore("queue");
   const req=store.get(id);
+  let quotaExceeded=false;
   req.onsuccess=()=>{
     const previous=req.result as QueuedChange|undefined;
     const baseValue=previous?.baseValue??Boolean(entry[stateColumn(field)]);
     const now=Date.now();
-    if(desired===baseValue){
-      // Reversing a pending local change cancels it.
+    if(desired===baseValue&&!previous?.inFlight){
+      // Cancel only if the preceding change has never been sent.
       if(previous)store.delete(id);
       return;
     }
-    store.put({
+    const persist=()=>store.put({
       id,userId,entryId:entry.id,field,desired,baseValue,
       expectedRevision:previous?.expectedRevision??Number(entry.revision||0),
+      generation:(previous?.generation??0)+1,inFlight:false,
       createdAt:previous?.createdAt??now,updatedAt:now,status:"pending"
     } satisfies QueuedChange);
+    if(previous)persist();
+    else{
+      const count=store.index("byUser").count(userId);
+      count.onsuccess=()=>{
+        if(count.result>=OP_LIMIT){quotaExceeded=true;tx.abort();}
+        else persist();
+      };
+    }
+  };
+  try{await done;}
+  catch(error){
+    if(quotaExceeded)throw Error("Offline fronta má limit "+OP_LIMIT+" změn. Nejprve synchronizuj.");
+    throw error;
+  }
+}
+/** Persist in-flight marker before HTTP so a reversal cannot silently disappear. */
+async function markSending(op:QueuedChange):Promise<void>{
+  const db=await openDB();
+  const tx=db.transaction("queue","readwrite");
+  const done=finished(tx);
+  const store=tx.objectStore("queue");
+  const req=store.get(op.id);
+  req.onsuccess=()=>{
+    const current=req.result as QueuedChange|undefined;
+    if(current?.generation===op.generation)
+      store.put({...current,inFlight:true} satisfies QueuedChange);
   };
   await done;
-  if((await getChanges(userId)).length>OP_LIMIT)
-    throw Error("Offline fronta překročila limit "+OP_LIMIT+" změn. Připoj se k serveru.");
 }
 async function updateIfCurrent(op:QueuedChange,action:"delete"|"conflict"|"rebase",
   remote?:RemoteState):Promise<boolean>{
@@ -170,7 +225,19 @@ async function updateIfCurrent(op:QueuedChange,action:"delete"|"conflict"|"rebas
   const req=store.get(op.id);
   req.onsuccess=()=>{
     const current=req.result as QueuedChange|undefined;
-    if(!current||current.updatedAt!==op.updatedAt||current.desired!==op.desired)return;
+    if(!current)return;
+    if(current.generation!==op.generation||current.desired!==op.desired){
+      // A later edit arrived while the old request was in flight.
+      // Rebase that intent against the server acknowledgement, never discard it.
+      if(action==="delete" && remote){
+        const serverValue=Boolean(remote[stateColumn(op.field)]);
+        if(current.desired===serverValue)store.delete(op.id);
+        else store.put({...current,baseValue:serverValue,
+          expectedRevision:Number(remote.revision),inFlight:false,
+          status:"pending"} satisfies QueuedChange);
+      }
+      return;
+    }
     changed=true;
     if(action==="delete")store.delete(op.id);
     else if(remote){
@@ -198,7 +265,8 @@ export async function resolveConflict(id:string,choice:"server"|"local"):Promise
       store.delete(id);return;
     }
     store.put({...item,status:"pending",baseValue:Boolean(item.remoteValue),
-      expectedRevision:Number(item.remoteRevision||0),updatedAt:Date.now()} satisfies QueuedChange);
+      expectedRevision:Number(item.remoteRevision||0),updatedAt:Date.now(),
+      generation:(item.generation??0)+1} satisfies QueuedChange);
   };
   await done;
 }
@@ -208,6 +276,7 @@ export async function flushChanges(userId:string,
   let applied=0,conflicts=0,blocked=false;
   for(const op of entries){
     if(op.status==="conflict"){conflicts++;continue;}
+    await markSending(op);
     let outcome:SendResult;
     try{outcome=await send(op);}catch{blocked=true;break;}
     if(outcome.kind==="retry"){blocked=true;break;}
@@ -217,13 +286,13 @@ export async function flushChanges(userId:string,
       conflicts++;continue;
     }
     if(outcome.kind==="ok"){
-      if(await updateIfCurrent(op,"delete"))applied++;
+      if(await updateIfCurrent(op,"delete",outcome.state))applied++;
       continue;
     }
     const remote=outcome.state;
     const serverValue=Boolean(remote[stateColumn(op.field)]);
     if(serverValue===op.desired){
-      if(await updateIfCurrent(op,"delete"))applied++;
+      if(await updateIfCurrent(op,"delete",remote))applied++;
       continue;
     }
     if(serverValue!==op.baseValue){
@@ -236,7 +305,7 @@ export async function flushChanges(userId:string,
     let second:SendResult;
     try{second=await send(retry);}catch{blocked=true;break;}
     if(second.kind==="ok"){
-      if(await updateIfCurrent(op,"delete"))applied++;
+      if(await updateIfCurrent(op,"delete",second.state))applied++;
     }else if(second.kind==="conflict"){
       await updateIfCurrent(op,"conflict",second.state);
       conflicts++;
@@ -249,9 +318,10 @@ export async function flushChanges(userId:string,
 export async function clearOfflineUser(userId:string):Promise<void>{
   validUser(userId);
   const db=await openDB();
-  const tx=db.transaction(["snapshots","queue"],"readwrite");
+  const tx=db.transaction(["snapshots","queue","prefs"],"readwrite");
   const done=finished(tx);
   tx.objectStore("snapshots").delete(userId);
+  tx.objectStore("prefs").delete(userId);
   const q=tx.objectStore("queue");
   const cursor=q.index("byUser").openCursor(userId);
   cursor.onsuccess=()=>{

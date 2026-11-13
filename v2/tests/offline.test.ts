@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import "fake-indexeddb/auto";
 import {cacheSnapshot,getSnapshot,queueChange,getChanges,overlayChanges,
-  flushChanges,resolveConflict,clearOfflineUser,type RemoteState} from "../apps/web/src/offline.js";
+  flushChanges,resolveConflict,clearOfflineUser,getCachePreference,setCachePreference,type RemoteState} from "../apps/web/src/offline.js";
 import type {Entry,Feed,Stats} from "../apps/web/src/api.js";
 
 const userA="00000000-0000-4000-8000-000000000001";
@@ -27,7 +27,12 @@ function remote(revision:number,starred:boolean,saved:boolean):RemoteState{
     saved_at:saved?"2026-11-14T00:10:00Z":null,
     revision,updated_at:"2026-11-14T00:10:00Z"};
 }
-test("offline snapshots remain separate across accounts",async()=>{
+test("offline snapshots require explicit permission and remain separate across accounts",async()=>{
+  assert.equal(await getCachePreference(userA),false);
+  await cacheSnapshot(userA,feeds,[entry],stats);
+  assert.equal(await getSnapshot(userA),null);
+  await setCachePreference(userA,true);
+  await setCachePreference(userB,true);
   await cacheSnapshot(userA,feeds,[entry],stats);
   await cacheSnapshot(userB,feeds,[other],stats);
   assert.equal((await getSnapshot(userA))?.entries[0].id,entryId);
@@ -91,6 +96,34 @@ test("repeated races are surfaced as conflicts, then resolved explicitly",async(
     return {kind:"ok",state:remote(10,false,true)};
   });
   assert.equal(resumed.remaining,0);
+});
+test("reversing a flag during an in-flight request keeps the final user intent",async()=>{
+  await queueChange(userA,entry,"read",true);
+  const before=(await getChanges(userA))[0];
+  assert.equal(before.desired,true);
+  const first=await flushChanges(userA,async op=>{
+    assert.equal(op.desired,true);
+    await queueChange(userA,entry,"read",false);
+    return {kind:"ok",state:{...remote(1,false,false),read_at:"2026-11-14T01:00:00Z"}};
+  });
+  assert.equal(first.remaining,1);
+  const pending=(await getChanges(userA))[0];
+  assert.equal(pending.desired,false);
+  assert.equal(pending.expectedRevision,1);
+  const second=await flushChanges(userA,async op=>{
+    assert.equal(op.expectedRevision,1);
+    assert.equal(op.desired,false);
+    return {kind:"ok",state:{...remote(2,false,false),read_at:null}};
+  });
+  assert.equal(second.remaining,0);
+});
+test("disabling article cache removes content but preserves unsent status",async()=>{
+  await queueChange(userA,entry,"saved",true);
+  await setCachePreference(userA,false);
+  assert.equal(await getCachePreference(userA),false);
+  assert.equal(await getSnapshot(userA),null);
+  assert.equal((await getChanges(userA)).length,1);
+  // Explicit test cleanup for next account deletion case.
 });
 test("per-user data are deleted without impacting another account",async()=>{
   await clearOfflineUser(userA);

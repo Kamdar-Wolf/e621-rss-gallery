@@ -1,7 +1,7 @@
 # Offline režim – první implementace (vývojová verze)
 
 ## Co funguje
-- Aplikace uchovává v IndexedDB **posledních až 500 článků**, přehled zdrojů a počty položek samostatně pro každé ID uživatele.
+- Po **výslovném souhlasu** aplikace uchovává v IndexedDB **posledních až 500 článků**, přehled zdrojů a počty položek samostatně pro každé ID uživatele.
 - Po výpadku připojení lze v **již přihlášené a otevřené kartě** prohlížet uložené titulky, textové souhrny, zdroje a lokálně filtrovat/vyhledávat v uložených článcích.
 - Kliknutí na přečteno, oblíbené nebo uložit vytvoří odolnou lokální frontu změn. Každá položka/akce má jedinečný klíč; opakované přepnutí zruší zbytečný požadavek.
 - Po obnovení spojení klient změny odesílá. Každá operace nese očekávanou revizi a aktualizuje pouze **jediné konkrétní pole**, takže nedochází k nechtěnému přepsání jiných příznaků.
@@ -9,7 +9,7 @@
 - Při odhlášení se aplikace **zeptá před smazáním** offline článků a nedokončených změn; potom smaže lokální data daného účtu.
 
 ## Co se ukládá
-Textová metadata článků, názvy zdrojů, URL obrázků a fronta stavů. **Neukládají se hesla, session cookie ani CSRF token.** Offline data nejsou v této etapě šifrována a mají dostupnost v rámci profilu prohlížeče. Na sdíleném počítači používej jen oddělené uživatelské profily.
+Při zapnuté offline kopii textová metadata článků, názvy zdrojů a URL obrázků; fronta změn se ukládá nezávisle na volbě cache. **Neukládají se hesla, session cookie ani CSRF token.** Offline data nejsou v této etapě šifrována a mají dostupnost v rámci profilu prohlížeče. Na sdíleném počítači používej jen oddělené uživatelské profily.
 
 ## Service worker
 Při **produkčním sestavení** (`npm run build:web`) se vygeneruje `dist-web/sw.js` s přesným seznamem statických hashed JS/CSS souborů. Cache API ukládá pouze samotné rozhraní aplikace. **API a média z cizích domén se do Cache API nikdy neukládají.** Bez instalovaného service workeru může offline obnovení stránky skončit chybou prohlížeče.
@@ -24,3 +24,9 @@ Při **produkčním sestavení** (`npm run build:web`) se vygeneruje `dist-web/s
 
 ## Testy
 `tests/offline.test.ts` používá náhradní IndexedDB v Node.js a ověřuje izolaci účtů, přetrvání fronty, deduplikaci, odesílání po výpadku, slučování jiných revizí a explicitní řešení konfliktů.
+
+## Zabezpečení dodatečně upravené v této etapě
+- Lokální kopie osobních článků je nyní **výchozím stavem vypnutá** a lze ji zapnout teprve potvrzením v aplikaci. Vypnutí smaže uložené texty, nikoli neodeslané změny.
+- Přechod z vývojové databáze IndexedDB v1 na v2 automaticky odstraňuje staré kopie, které se ukládaly bez souhlasu.
+- Fronta má ochranný limit **před** zápisem nové operace, nikoli až po něm.
+- Synchronizace používá generační číslo požadavku: změna během síťového odesílání nesmí být omylem odstraněna potvrzením starší verze.
