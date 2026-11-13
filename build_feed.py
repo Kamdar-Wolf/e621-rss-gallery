@@ -12,6 +12,7 @@ from urllib.parse import urlencode, urljoin, urlsplit
 from urllib.request import Request, urlopen
 import re
 import sys
+import time
 import xml.etree.ElementTree as ET
 
 def load_tags():
@@ -27,15 +28,19 @@ def load_tags():
         if tag not in seen:
             terms.append(tag)
             seen.add(tag)
-    if not 1 <= len(terms) <= 40:
-        raise ValueError(f"tags.txt must have 1 to 40 unique tags, found {len(terms)}")
-    return " ".join(terms)
+    if not 1 <= len(terms) <= 320:
+        raise ValueError(f"tags.txt must have 1 to 320 unique tags, found {len(terms)}")
+    return terms
 
 
 TAGS = load_tags()
-UA = "KamdarE621RSS/1.0 (+https://github.com/Kamdar-Wolf)"
-E621_ATOM = "https://e621.net/posts.atom?" + urlencode({"tags": TAGS, "_client": UA})
-E621_SEARCH = "https://e621.net/posts?" + urlencode({"tags": TAGS})
+UA = "KamdarE621RSS/1.2 (by Kamdar-Wolf on e621)"
+# e621 allows up to 40 search terms in one request. Smaller chunks are
+# deliberate to leave room for AND/negative filters and avoid oversized URLs.
+CHUNK_SIZE = 25
+MAX_ITEMS = 200
+E621_SEARCH = "https://e621.net/posts"
+
 AT = "{http://www.w3.org/2005/Atom}"
 MEDIA = "http://search.yahoo.com/mrss/"
 CONTENT = "http://purl.org/rss/1.0/modules/content/"
@@ -103,8 +108,65 @@ def atom_date(value):
         return format_datetime(datetime.now(timezone.utc), usegmt=True)
 
 
-def fetch_atom():
-    req = Request(E621_ATOM, headers={
+def make_queries(tags):
+    """Split OR tags across queries while repeating global AND/NOT filters.
+
+    All current tags are OR (~tag). Plain and negative terms, if added later,
+    must appear in every chunk to preserve search semantics.
+    """
+    common = [t for t in tags if not t.startswith("~")]
+    alternatives = [t for t in tags if t.startswith("~")]
+    if len(common) > 40:
+        raise ValueError("Too many mandatory filter terms (max 40).")
+    if not alternatives:
+        return [common]
+    capacity = min(CHUNK_SIZE, 40 - len(common))
+    if capacity < 1:
+        raise ValueError("No room for OR terms after mandatory filters.")
+    return [common + alternatives[i:i + capacity]
+            for i in range(0, len(alternatives), capacity)]
+
+
+def sort_entry(entry):
+    stamp = child_text(entry, "published") or child_text(entry, "updated")
+    try:
+        moment = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        return moment.astimezone(timezone.utc).timestamp()
+    except (ValueError, OverflowError, TypeError):
+        return 0
+
+
+def merge_atom_feeds(feeds):
+    """Merge all results, de-duplicate by Atom ID, newest first."""
+    merged = ET.Element(f"{{{AT[1:-1]}}}feed")
+    unique = {}
+    for raw in feeds:
+        root = ET.fromstring(raw)
+        if localname(root.tag) != "feed":
+            raise RuntimeError("e621 did not return an Atom feed")
+        for entry in root:
+            if localname(entry.tag) != "entry":
+                continue
+            identity = child_text(entry, "id")
+            if not identity:
+                identity = next((node.get("href", "") for node in entry
+                                 if localname(node.tag) == "link" and
+                                 node.get("rel", "alternate") == "alternate"), "")
+            if identity and identity not in unique:
+                unique[identity] = entry
+    ordered = sorted(unique.values(),
+                     key=lambda entry: (sort_entry(entry), child_text(entry, "id")),
+                     reverse=True)
+    for entry in ordered[:MAX_ITEMS]:
+        merged.append(entry)
+    return ET.tostring(merged, encoding="utf-8", xml_declaration=True)
+
+
+def fetch_atom(terms):
+    url = "https://e621.net/posts.atom?" + urlencode({"tags": " ".join(terms), "_client": UA})
+    req = Request(url, headers={
         "User-Agent": UA,
         "Accept": "application/atom+xml, application/xml;q=0.9, */*;q=0.1"
     })
@@ -179,10 +241,34 @@ def main():
         parsed = ET.fromstring(xml)
         assert total == pictures == 2
         assert len(parsed.findall("channel/item/enclosure")) == 2
-        print("SELF-TEST OK: 2 entries and 2 valid image enclosures")
+        queries = make_queries(["~tag" + str(i) for i in range(41)])
+        assert len(queries) == 2
+        assert sum(len(q) for q in queries) == 41
+        assert all(len(q) <= 40 for q in queries)
+        mixed = make_queries(["-gore", "rating:s"] +
+                             ["~artist" + str(i) for i in range(60)])
+        assert all(q[:2] == ["-gore", "rating:s"] for q in mixed)
+        assert sum(len(q) - 2 for q in mixed) == 60
+        duplicate = fixture.replace(b"Post/2", b"Post/3").replace(
+            b"2026-11-13T00:07:41+01:00",
+            b"2026-11-14T00:07:41+01:00")
+        merged = merge_atom_feeds([fixture, duplicate])
+        entries = [e for e in ET.fromstring(merged) if localname(e.tag) == "entry"]
+        assert len(entries) == 3
+        assert child_text(entries[0], "id").endswith("Post/3")
+        print("SELF-TEST OK: batching, global filters, deduplication, chronological merge and previews")
         return
 
-    raw = fetch_atom()
+    queries = make_queries(TAGS)
+    print(f"{len(TAGS)} tags -> {len(queries)} e621 Atom queries; max 40 terms each")
+    responses = []
+    for index, terms in enumerate(queries, 1):
+        if index > 1:
+            time.sleep(0.75)  # e621 rate-limit guidance: stay below 2 req/sec
+        print(f"Downloading Atom batch {index}/{len(queries)} ({len(terms)} terms)")
+        responses.append(fetch_atom(terms))
+    # Do not publish a partial result if any upstream request failed.
+    raw = merge_atom_feeds(responses)
     xml, n, pictures = build(raw)
     output = Path(__file__).parent / "public" / "feed.xml"
     output.parent.mkdir(parents=True, exist_ok=True)
