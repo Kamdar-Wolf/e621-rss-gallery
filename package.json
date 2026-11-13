@@ -1,0 +1,21 @@
+{
+  "name": "kamdar-reader-v2",
+  "private": true,
+  "version": "0.2.0-alpha.1",
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w @kamdar/api",
+    "dev:worker": "npm run worker -w @kamdar/api",
+    "dev:web": "npm run dev -w @kamdar/web",
+    "build": "npm run build -w @kamdar/api && npm run build -w @kamdar/web",
+    "test": "npm run test -w @kamdar/api && npm run test -w @kamdar/web",
+    "typecheck": "npm run typecheck -w @kamdar/api && npm run typecheck -w @kamdar/web",
+    "lint:check": "npm run typecheck"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
