@@ -35,7 +35,7 @@ Pravidla pro `tags.txt`:
 - `~` znamená logické **OR** (příspěvek může odpovídat kterékoli uvedené značce).
 - Ponech u alternativních značek prefix `~`.
 - Prázdné řádky a komentáře začínající `#` se ignorují.
-- Nejvýše 40 různých značek v této konfiguraci; duplicity se automaticky ignorují.
+- Až 320 různých značek v této konfiguraci; generátor je rozdělí do dávek max. 40 výrazů, sloučí nejnovější příspěvky a odstraní duplicity.
 - Do souboru patří značky, nikoli celá webová adresa.
 
 ## Kde se vytváří RSS
