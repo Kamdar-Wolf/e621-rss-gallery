@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useMemo,useState, type FormEvent} from "react";
+import {useCallback,useEffect,useMemo,useRef,useState, type ChangeEvent, type FormEvent} from "react";
 import {api,type Feed,type Entry,type EntryPage,type Cursor,type Stats} from "./api.js";
 
 type FolderView="all"|"unread"|"starred"|"saved";
@@ -64,6 +64,8 @@ export function App(){
   const [adding,setAdding]=useState(false);
   const [mobileNav,setMobileNav]=useState(false);
   const [theme,setTheme]=useState<"dark"|"light">("dark");
+  const opmlInput=useRef<HTMLInputElement>(null);
+  const [opmlBusy,setOpmlBusy]=useState(false);
 
   const load=useCallback(async (auth:string,selected:string,loadMore=false,next:Cursor|null=null)=>{
     setError("");setLoading(true);
@@ -103,6 +105,15 @@ export function App(){
   },[entries,view,media,search,sort]);
 
   const sourceNames=useMemo(()=>Object.fromEntries(feeds.map(f=>[f.id,f.display_title||f.title])),[feeds]);
+  const groupedFeeds=useMemo(()=>{
+    const groups=new Map<string,Feed[]>();
+    for(const feed of feeds){
+      const category=feed.folder_name||"Nezařazené";
+      const list=groups.get(category)||[];
+      list.push(feed);groups.set(category,list);
+    }
+    return [...groups.entries()].sort((a,b)=>a[0].localeCompare(b[0],"cs"));
+  },[feeds]);
   const viewName=feedId?(sourceNames[feedId]||"Vybraný zdroj"):
     ({all:"Všechny příspěvky",unread:"Nepřečtené",starred:"Oblíbené",saved:"Číst později"} as Record<FolderView,string>)[view];
 
@@ -135,6 +146,39 @@ export function App(){
       await load(token,feedId);
     }catch(err){setError(err instanceof Error?err.message:"Zdroj nelze přidat");}
   }
+  async function importOPMLFile(event:ChangeEvent<HTMLInputElement>){
+    const file=event.target.files?.[0];
+    event.target.value="";
+    if(!file)return;
+    if(file.size>190_000){setError("OPML je příliš velké (limit 190 kB).");return;}
+    setError("");setNotice("");setOpmlBusy(true);
+    try{
+      const opml=await file.text();
+      const result=await api<{total:number;added:number;alreadySubscribed:number;folders:number}>(
+        token,"/v1/opml/import",{method:"POST",body:JSON.stringify({opml})});
+      setNotice("Import dokončen: "+result.added+" nových kanálů z "+
+        result.total+"; "+result.alreadySubscribed+" již sledovaných. Složky: "+result.folders+".");
+      await load(token,feedId);
+    }catch(error){
+      setError(error instanceof Error?error.message:"Import OPML se nezdařil.");
+    }finally{setOpmlBusy(false);}
+  }
+  async function exportOPMLFile(){
+    setError("");setNotice("");setOpmlBusy(true);
+    try{
+      const result=await api<{xml:string;filename:string}>(token,"/v1/opml/export");
+      const blob=new Blob([result.xml],{type:"application/xml;charset=utf-8"});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");
+      a.href=url;a.download="kamdar-reader.opml";
+      document.body.appendChild(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+      setNotice("OPML exportováno. Ulož soubor bezpečně – může obsahovat soukromé URL.");
+    }catch(error){
+      setError(error instanceof Error?error.message:"Export OPML se nezdařil.");
+    }finally{setOpmlBusy(false);}
+  }
+
   async function refresh(){
     setNotice("");setError("");
     try{
@@ -196,15 +240,26 @@ export function App(){
       <section className="side-section feeds-section">
         <div className="section-row"><p className="section-label">ZDROJE · {stats.subscriptions}</p>
           <button className="plus" title="Přidat RSS" onClick={()=>setAdding(true)}>+</button></div>
-        {feeds.map(f=><div className={"feed-wrap "+(feedId===f.id?"selected":"")} key={f.id}>
-          <button className="feed-item" title={f.url} onClick={()=>{setFeedId(f.id);setView("all");setActive(null);setMobileNav(false);}}>
-            <span className="feed-symbol">{f.display_title?.slice(0,1).toUpperCase()||"R"}</span>
-            <span className="feed-text">{f.display_title||f.title}</span>
-            {f.last_error?<span className="feed-error" title={f.last_error}>!</span>:null}
-          </button>
-          <button className="feed-delete" title="Odhlásit zdroj" onClick={()=>void unsubscribe(f)}>×</button>
+        <div className="opml-actions">
+          <button type="button" disabled={opmlBusy} onClick={()=>opmlInput.current?.click()}>
+            ↑ Import OPML</button>
+          <button type="button" disabled={opmlBusy} onClick={()=>void exportOPMLFile()}>
+            ↓ Export OPML</button>
+        </div>
+        <input ref={opmlInput} className="visually-hidden" type="file" accept=".opml,.xml,application/xml,text/xml"
+          aria-label="Vybrat soubor OPML" onChange={event=>void importOPMLFile(event)} />
+        {groupedFeeds.map(([folder,list])=><div key={folder}>
+          <h3 className="feed-folder-heading">{folder}</h3>
+          {list.map(f=><div className={"feed-wrap "+(feedId===f.id?"selected":"")} key={f.id}>
+            <button className="feed-item" title={f.last_error||f.url} onClick={()=>{setFeedId(f.id);setView("all");setActive(null);setMobileNav(false);}}>
+              <span className="feed-symbol">{f.display_title?.slice(0,1).toUpperCase()||"R"}</span>
+              <span className="feed-text">{f.display_title||f.title}</span>
+              {f.last_error?<span className="feed-error" title={f.last_error}>!</span>:null}
+            </button>
+            <button className="feed-delete" title="Odhlásit zdroj" onClick={()=>void unsubscribe(f)}>×</button>
+          </div>)}
         </div>)}
-        {!feeds.length?<p className="muted-small">Zatím žádné zdroje. Přidej RSS nebo importuj OPML pomocí příkazové řádky.</p>:null}
+        {!feeds.length?<p className="muted-small">Zatím žádné zdroje. Přidej RSS nebo importuj OPML.</p>:null}
       </section>
       <div className="sidebar-bottom"><div className="online-dot"></div>Lokální vývojová instance
         <button title="Odhlásit" onClick={()=>{setToken("");setEntries([]);setFeeds([]);}}>Odhlásit</button>
