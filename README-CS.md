@@ -10,7 +10,13 @@ Jde o první funkční verzi samostatné RSS čtečky. Nabízí galerii, karty a
 
 **Omezení beta verze:** Aplikace používá lokální úložiště prohlížeče, takže stav není synchronizovaný mezi zařízeními. Importované externí RSS/Atom kanály mohou být blokované prohlížečovou politikou CORS; nejde zatím o skutečnou serverovou agregaci libovolného množství zdrojů. Plná kompatibilita s Inoreader/Folo bude vyžadovat autentizovaný backend, databázi a pozdější fáze vývoje.
 
-**Rozbor konkurence a plán dalších funkcí:** [READER_ARCHITECTURE.md](READER_ARCHITECTURE.md).
+**Kompletní projektový plán pro pokračování vývoje:**
+- [Technická a produktová realizace](docs/PLAN_REALIZACE.md) — architektura, databáze, API, servery, bezpečnost, postup etap a přejímka.
+- [Grafická a UX/UI specifikace](docs/UI_UX_SPECIFIKACE.md) — design systém, desktop/mobil, 18 obrazovek, galerie, lightbox, přístupnost.
+- [Prioritizovaný implementační backlog](docs/BACKLOG.md) — 37 vývojových úkolů s pořadím, závislostmi a testy.
+- [Starší výchozí architektonický přehled](READER_ARCHITECTURE.md).
+
+Tyto dokumenty popisují **budoucí požadavky**, nikoli funkce, které jsou už v beta aplikaci hotové.
 
 ## Nejdůležitější: změna sledovaných značek
 
