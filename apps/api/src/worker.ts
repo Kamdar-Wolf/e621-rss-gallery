@@ -8,8 +8,10 @@ import {ingestFeed} from "./ingest.js";
 const redis=new Redis(config.redisUrl,{maxRetriesPerRequest:null});
 const queue=new Queue("feed-ingest",{connection:redis});
 const worker=new Worker("feed-ingest",async job=>{
+  // Single worker and conservative delay protect source rate limits.
+  await new Promise(resolve=>setTimeout(resolve,config.fetchMinIntervalMs));
   return ingestFeed(job.data.feedId as string);
-},{connection:redis,concurrency:2});
+},{connection:redis,concurrency:1});
 worker.on("failed",(job,error)=>console.error("Feed worker failed",job?.id,error.message));
 worker.on("completed",(job)=>console.log("Updated feed",job.data.feedId));
 let running=true;
