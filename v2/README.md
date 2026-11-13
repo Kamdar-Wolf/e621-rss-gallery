@@ -91,3 +91,21 @@ npm run build:web
 ```
 
 Sestavení ověřuje, že UI lze přeložit a připravit ke statickému publikování. Nesmí se však nasazovat do veřejného hostingu bez produkční autentizace a správného backendu.
+
+
+## Import/export OPML přímo v aplikaci (vývojová verze 2.0)
+
+V levém panelu **Zdroje** jsou tlačítka **Import OPML** a **Export OPML**.
+
+- Import podporuje XML OPML včetně vnořených složek a automaticky vynechá duplicitní odběry.
+- Import je transakční: pokud databázový zápis selže, import se vrátí zpět.
+- Limit importovaného souboru z UI je 190 kB (API přijímá do 200 kB).
+- Export ukládá soubor `kamdar-reader.opml` do počítače. **Pozor:** může obsahovat soukromé URL a přístupové tokeny ve zdrojových adresách – neposílat jej do veřejného repozitáře.
+- Jde stále o jednouživatelskou místní vývojovou instanci. K nasazení přes internet bude nutné nahradit vývojový bearer token bezpečnými účty a relacemi.
+
+API:
+- `POST /v1/opml/import` s JSON `{"opml":"<opml ...>..." }` vrací počet nových a existujících odběrů.
+- `GET /v1/opml/export` vrací `{"filename":"kamdar-reader.opml","xml":"..."}`.
+- `GET /v1/folders` vrací složky importované z OPML.
+
+Všechny tři endpointy jsou autorizované stejným vývojovým tokenem jako zbytek API.
