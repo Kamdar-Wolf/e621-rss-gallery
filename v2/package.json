@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types tests/*.test.ts",
+    "test": "tsx --test tests/*.test.ts",
     "dev:api": "tsx watch apps/api/src/server.ts",
     "start:api": "node dist/apps/api/src/server.js",
     "migrate": "tsx scripts/migrate.ts"

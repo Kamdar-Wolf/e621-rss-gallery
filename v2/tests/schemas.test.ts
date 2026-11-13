@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canonicalFeedUrl,addFeedSchema,entryStateSchema,cursorSchema } from "../packages/shared/src/schemas.ts";
+import { canonicalFeedUrl,addFeedSchema,entryStateSchema,cursorSchema } from "../packages/shared/src/schemas.js";
 
 test("canonical URL drops fragment and normalizes host",()=>{
   assert.equal(canonicalFeedUrl("https://Example.COM/feed.xml#old"),"https://example.com/feed.xml");
