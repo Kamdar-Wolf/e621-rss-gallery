@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { addFeedSchema, canonicalFeedUrl, cursorSchema, entryStateSchema } from "../../../packages/shared/src/schemas.js";
 import { connectPool } from "./db.js";
+import { importOpml, exportOpml } from "./opml-service.js";
+import { parseOpml } from "../../worker/src/opml.js";
 
 const OWNER_ID = process.env.READER_OWNER_ID || "00000000-0000-4000-8000-000000000001";
 
@@ -35,11 +37,39 @@ export function buildApp(pool: pg.Pool, apiToken: string) {
   app.get("/v1/feeds", async () => {
     const {rows}=await pool.query(
       `SELECT f.id,f.title,f.canonical_url AS url,f.last_success_at,f.last_error,f.next_poll_at,f.last_checked_at,f.last_http_status,f.failure_count,
-              s.folder_id,COALESCE(s.title_override,f.title) AS display_title
+              s.folder_id,fd.name AS folder_name,COALESCE(s.title_override,f.title) AS display_title
          FROM subscriptions s JOIN feeds f ON s.feed_id=f.id
+         LEFT JOIN folders fd ON fd.id=s.folder_id AND fd.user_id=s.user_id
         WHERE s.user_id=$1 ORDER BY display_title ASC`,[OWNER_ID]
     );
     return {items:rows};
+  });
+
+  app.get("/v1/folders", async () => {
+    const {rows}=await pool.query(
+      "SELECT id,parent_id,name,sort_order FROM folders WHERE user_id=$1 "+
+      "ORDER BY sort_order,name,id",[OWNER_ID]);
+    return {items:rows};
+  });
+
+  app.post("/v1/opml/import", async (req,reply) => {
+    const raw=(req.body as {opml?:unknown}|null)?.opml;
+    if(typeof raw!=="string" || !raw.trim() || Buffer.byteLength(raw,"utf8")>200_000)
+      return reply.code(400).send({error:"OPML must be a non-empty XML string under 200 kB"});
+    try{
+      const preview=parseOpml(raw);
+      if(!preview.length)
+        return reply.code(400).send({error:"OPML contains no valid RSS/Atom subscriptions"});
+    }catch{
+      return reply.code(400).send({error:"Invalid OPML document"});
+    }
+    const result=await importOpml(pool,OWNER_ID,raw);
+    return reply.code(201).send(result);
+  });
+
+  app.get("/v1/opml/export", async () => {
+    const xml=await exportOpml(pool,OWNER_ID);
+    return {filename:"kamdar-reader.opml",xml};
   });
 
   app.post("/v1/feeds", async (req,reply) => {
