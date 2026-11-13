@@ -3,6 +3,7 @@ import {authenticate,HttpError,loadSession,request,setCsrf,type Entry,type Feed,
 
 type Layout="gallery"|"cards"|"list";
 type View="all"|"unread"|"starred"|"saved";
+type Media="all"|"image"|"article"|"audio"|"video";
 
 function formattedDate(value:string){
   const d=new Date(value);return Number.isNaN(d.getTime())?"Bez data":
@@ -53,6 +54,8 @@ export default function App(){
   const [checking,setChecking]=useState(true);
   const [feeds,setFeeds]=useState<Feed[]>([]);
   const [entries,setEntries]=useState<Entry[]>([]);
+  const [cursor,setCursor]=useState<string|null>(null);
+  const [media,setMedia]=useState<Media>("all");
   const [view,setView]=useState<View>("all");
   const [feedId,setFeedId]=useState("");
   const [search,setSearch]=useState("");
@@ -71,7 +74,7 @@ export default function App(){
     try{const result=await request<{feeds:Feed[]}>("/feeds");setFeeds(result.feeds);}
     catch(e){setError(e instanceof Error?e.message:"Nepodařilo se načíst zdroje");}
   },[session]);
-  const loadEntries=useCallback(async(query:{filter?:View;feedId?:string;search?:string}={})=>{
+  const loadEntries=useCallback(async(query:{filter?:View;feedId?:string;search?:string;media?:Media;cursor?:string;append?:boolean}={})=>{
     if(!session)return;
     setLoading(true);
     try{
@@ -79,8 +82,11 @@ export default function App(){
       if(query.feedId)p.set("feedId",query.feedId);
       if(query.filter&&query.filter!=="all")p.set("filter",query.filter);
       if(query.search)p.set("q",query.search);
-      const result=await request<{entries:Entry[]}>("/entries?"+p.toString());
-      setEntries(result.entries);setError("");
+      if(query.media && query.media!=="all")p.set("media",query.media);
+      if(query.cursor)p.set("cursor",query.cursor);
+      const result=await request<{entries:Entry[];nextCursor:string|null}>("/entries?"+p.toString());
+      setEntries(old=>query.append?[...old,...result.entries.filter(e=>!old.some(previous=>previous.id===e.id))]:result.entries);
+      setCursor(result.nextCursor);setError("");
       setRefreshTime(new Intl.DateTimeFormat("cs-CZ",{hour:"2-digit",minute:"2-digit"}).format(new Date()));
     }catch(e){setError(e instanceof Error?e.message:"Nelze načíst příspěvky");}
     finally{setLoading(false);}
@@ -88,7 +94,7 @@ export default function App(){
 
   useEffect(()=>{let live=true;void loadSession().then(s=>{if(live){setSession(s);setChecking(false);}});return()=>{live=false;};},[]);
   useEffect(()=>{if(!session)return;void loadFeeds();},[session,loadFeeds]);
-  useEffect(()=>{const id=setTimeout(()=>{void loadEntries({feedId,filter:view,search});},search?350:0);return()=>clearTimeout(id);},[feedId,view,search,loadEntries]);
+  useEffect(()=>{const id=setTimeout(()=>{void loadEntries({feedId,filter:view,search,media});},search?350:0);return()=>clearTimeout(id);},[feedId,view,search,media,loadEntries]);
   useEffect(()=>{
     if(!session)return;
     let alive=true;let seq=0;
@@ -104,9 +110,9 @@ export default function App(){
       }catch{/* network temporarily unavailable; retry later */}
     };
     const timer=setInterval(()=>void poll(),5000);
-    const reload=setInterval(()=>{void loadFeeds();void loadEntries({feedId,filter:view,search});},60000);
+    const reload=setInterval(()=>{void loadFeeds();void loadEntries({feedId,filter:view,search,media});},60000);
     return()=>{alive=false;clearInterval(timer);clearInterval(reload);};
-  },[session,loadFeeds,loadEntries,feedId,view,search]);
+  },[session,loadFeeds,loadEntries,feedId,view,search,media]);
   useEffect(()=>{const current=entries.find(e=>e.id===selected);setNoteDraft(current?.note||"");},[selected]);
   useEffect(()=>{
     function onKey(event:KeyboardEvent){
@@ -132,7 +138,7 @@ export default function App(){
       if(view==="unread"&&delta.isRead===true)setEntries(rows=>rows.filter(e=>e.id!==entry.id));
     }catch(e){
       setError(e instanceof HttpError&&e.code===409?"Konflikt změn na jiném zařízení. Načítám aktuální stav.":e instanceof Error?e.message:"Uložení se nezdařilo");
-      void loadEntries({feedId,filter:view,search});
+      void loadEntries({feedId,filter:view,search,media});
     }finally{setBusyEntry(null);}
   }
   async function addFeed(e:FormEvent){
@@ -150,6 +156,15 @@ export default function App(){
       setMessage("Importováno: "+r.imported+" kanálů; přeskočeno: "+r.skipped);
       setAdding(false);await loadFeeds();
     }catch(e){setError(e instanceof Error?e.message:"Import OPML selhal");}
+  }
+  async function exportOpml(){
+    try{
+      const response=await fetch("/api/v1/feeds/export",{credentials:"include"});
+      if(!response.ok)throw new Error("Export selhal: HTTP "+response.status);
+      const url=URL.createObjectURL(await response.blob());
+      const a=document.createElement("a");a.href=url;a.download="kamdar-feeds.opml";
+      document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }catch(e){setError(e instanceof Error?e.message:"Export se nezdařil");}
   }
   async function logout(){
     try{await request("/auth/logout",{method:"POST"});}catch{/* session may have expired */}
@@ -188,7 +203,7 @@ export default function App(){
         <button className="hamburger icon-control" onClick={()=>setShowNav(v=>!v)} aria-label="Navigace">☰</button>
         <label className="search"><span>⌕</span><input id="globalSearch" placeholder="Hledat v titulcích a obsahu… /" value={search} onChange={e=>setSearch(e.target.value)}/></label>
         <div className="top-buttons"><span className="last-sync">{refreshTime&&"Načteno "+refreshTime}</span>
-          <button className="icon-control" aria-label="Obnovit" title="Obnovit" onClick={()=>{void loadFeeds();void loadEntries({feedId,filter:view,search});}}>↻</button>
+          <button className="icon-control" aria-label="Obnovit" title="Obnovit" onClick={()=>{void loadFeeds();void loadEntries({feedId,filter:view,search,media});}}>↻</button>
           <button className="primary top-add" onClick={()=>setAdding(true)}>＋ <span>Nový zdroj</span></button>
           <button className="icon-control" title="Přepnout téma" aria-label="Přepnout téma" onClick={()=>setTheme(theme==="dark"?"light":"dark")}>{theme==="dark"?"☾":"☼"}</button>
         </div>
@@ -202,7 +217,7 @@ export default function App(){
         {feeds.some(f=>f.status==="error")&&<div className="banner warning-banner">Některé kanály se nepodařilo aktualizovat. U zdrojů v nabídce je zobrazena chyba, ostatní kanály pokračují v načítání.</div>}
         <div className="content-tools"><div className="tabs">
           {(["gallery","cards","list"] as Layout[]).map(t=><button key={t} className={layout===t?"active":""} onClick={()=>setLayout(t)}>{t==="gallery"?"▦ Galerie":t==="cards"?"▤ Karty":"≡ Seznam"}</button>)}
-        </div><span className="results">{entries.length} položek</span></div>
+        </div><div className="filter-controls"><select className="media-filter" aria-label="Filtrovat typ obsahu" value={media} onChange={e=>setMedia(e.target.value as Media)}><option value="all">Veškerý obsah</option><option value="image">Obrázky</option><option value="article">Články</option><option value="audio">Audio</option><option value="video">Video</option></select><span className="results">{entries.length} položek</span></div></div>
         {!loading&&entries.length===0?<div className="empty-message"><div className="empty-symbol">▧</div><h2>Žádné položky</h2><p>Zkontroluj odběry nebo počkej na první serverové načtení.</p><button className="primary" onClick={()=>setAdding(true)}>Přidat RSS kanál</button></div>:
           <div className={"entries "+layout}>
             {entries.map(entry=><article className={"entry "+(entry.is_read?"read":"")} key={entry.id}>
@@ -220,6 +235,7 @@ export default function App(){
               </div>
             </article>)}
           </div>}
+        {cursor&&<div className="more-area"><button className="secondary" disabled={loading} onClick={()=>void loadEntries({feedId,filter:view,search,media,cursor,append:true})}>{loading?"Načítám…":"Načíst další příspěvky ↓"}</button></div>}
       </div>
     </section>
     {selected&&<><div className="modal-shade" onClick={()=>setSelected(null)}/><aside className="detail">
@@ -237,11 +253,12 @@ export default function App(){
     </aside></>}
     {adding&&<div className="dialog-backdrop" role="presentation" onMouseDown={()=>setAdding(false)}><div className="dialog" role="dialog" aria-label="Přidat kanál" onMouseDown={e=>e.stopPropagation()}>
       <header><div><span className="eyebrow">SPRÁVA ODBĚRŮ</span><h2>Přidat RSS zdroj</h2></div><button className="icon-control" onClick={()=>setAdding(false)}>×</button></header>
+      <div className="import-area"><button className="secondary" onClick={()=>{setAddUrl("https://kamdar-wolf.github.io/e621-rss-gallery/feed.xml");setAddName("e621 – sledovaní autoři");}}>Použít současný e621 kanál</button></div>
       <form onSubmit={e=>void addFeed(e)}><label>URL kanálu<input type="url" placeholder="https://example.com/feed.xml" required value={addUrl} onChange={e=>setAddUrl(e.target.value)}/></label>
         <label>Vlastní název (volitelné)<input value={addName} onChange={e=>setAddName(e.target.value)} placeholder="Například Technologie"/></label>
         <button className="primary" type="submit">Přidat zdroj</button></form>
       <div className="import-area"><h3>Import Inoreader / OPML</h3><p>Hromadně založí odběry. Kanály se potom načítají serverem, takže prohlížeč není omezen politikou CORS.</p>
-        <label className="file-upload">Vybrat soubor OPML<input type="file" accept=".xml,.opml" onChange={e=>{const f=e.target.files?.[0];if(f)void uploadOpml(f);}}/></label></div>
+        <label className="file-upload">Vybrat soubor OPML<input type="file" accept=".xml,.opml" onChange={e=>{const f=e.target.files?.[0];if(f)void uploadOpml(f);}}/></label> <button className="secondary" onClick={()=>void exportOpml()}>Exportovat OPML</button></div>
       <div className="import-area"><h3>Správa e621 značek</h3><p>Původní generátor lze nadále spravovat přes tags.txt, než vznikne editor značek v aplikaci.</p>
         <a href="https://github.com/Kamdar-Wolf/e621-rss-gallery/blob/main/tags.txt" target="_blank" rel="noreferrer">Otevřít seznam značek ↗</a></div>
       <hr/><button className="text-btn" onClick={()=>void logout()}>Odhlásit se z tohoto zařízení</button>
