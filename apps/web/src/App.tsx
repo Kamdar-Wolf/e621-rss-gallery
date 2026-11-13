@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useMemo,useState} from "react";
+import {useCallback,useEffect,useMemo,useState,type FormEvent} from "react";
 import {authenticate,HttpError,loadSession,request,setCsrf,type Entry,type Feed,type Session,type SyncEvent} from "./api";
 
 type Layout="gallery"|"cards"|"list";
@@ -27,7 +27,7 @@ function AuthScreen({onSuccess}:{onSuccess:(s:Session)=>void}){
   const [mode,setMode]=useState<"login"|"bootstrap">("login");
   const [email,setEmail]=useState("");const [password,setPassword]=useState("");const [token,setToken]=useState("");
   const [busy,setBusy]=useState(false);const [error,setError]=useState("");
-  async function submit(e:React.FormEvent){
+  async function submit(e:FormEvent){
     e.preventDefault();setBusy(true);setError("");
     try{onSuccess(await authenticate(mode,email,password,token));}catch(err){setError(err instanceof Error?err.message:"Přihlášení selhalo");}
     finally{setBusy(false);}
@@ -135,7 +135,7 @@ export default function App(){
       void loadEntries({feedId,filter:view,search});
     }finally{setBusyEntry(null);}
   }
-  async function addFeed(e:React.FormEvent){
+  async function addFeed(e:FormEvent){
     e.preventDefault();
     try{
       await request("/feeds",{method:"POST",body:JSON.stringify({url:addUrl,name:addName})});
