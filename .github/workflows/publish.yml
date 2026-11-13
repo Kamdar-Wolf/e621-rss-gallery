@@ -1,6 +1,8 @@
 name: Publish e621 RSS with image previews
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
   schedule:
     - cron: '17 * * * *'
