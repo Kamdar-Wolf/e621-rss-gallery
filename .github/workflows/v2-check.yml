@@ -10,6 +10,23 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: reader
+          POSTGRES_USER: reader
+          POSTGRES_PASSWORD: ci_reader_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U reader -d reader"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgresql://reader:ci_reader_password@127.0.0.1:5432/reader
+      READER_API_TOKEN: test_only_random_very_long_token_123456789123
     defaults:
       run:
         working-directory: v2
@@ -24,3 +41,7 @@ jobs:
         run: npm run check
       - name: Unit tests
         run: npm test
+      - name: Apply migrations
+        run: npm run migrate
+      - name: Integration tests
+        run: npm run test:integration
