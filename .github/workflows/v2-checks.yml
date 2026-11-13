@@ -48,3 +48,9 @@ jobs:
         run: npm run test
       - name: Build API and client
         run: npm run build
+      - name: Upload built reader for visual QA
+        uses: actions/upload-artifact@v4
+        with:
+          name: kamdar-reader-v2-web
+          path: apps/web/dist/
+          retention-days: 7
