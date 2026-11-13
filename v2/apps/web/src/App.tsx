@@ -216,7 +216,7 @@ export function App(){
       (typeof navigator!=="undefined"&&!navigator.onLine))return;
     flushing.current=true;
     try{
-      const result=await flushChanges(user,async op=>{
+      const sendOperations=()=>flushChanges(user,async op=>{
         try{
           const response=await api<{state:RemoteState}>(
             auth,"/v1/entries/"+op.entryId+"/state",{
@@ -232,7 +232,13 @@ export function App(){
           return {kind:"retry" as const};
         }
       });
-      if(currentUser.current!==user)return;
+      // Serialize pending writes across tabs in browsers supporting Web Locks.
+      // The current tab retries at the next refresh if another tab holds it.
+      const result=navigator.locks
+        ? await navigator.locks.request("kr-offline-sync-"+user,{ifAvailable:true},
+            lock=>lock?sendOperations():Promise.resolve(null))
+        : await sendOperations();
+      if(!result||currentUser.current!==user)return;
       await refreshQueue(user);
       if(result.applied){
         await load(auth,feedId);
