@@ -77,6 +77,6 @@ Workflow `.github/workflows/v2-check.yml` ověřuje TypeScript, testy validace, 
 
 ## Offline režim (první etapa)
 
-Otevřená přihlášená karta umí při výpadku spojení zobrazit naposledy uložené textové články a zařadit změny přečtení, oblíbených a uložených položek do lokální fronty. Po obnovení spojení se změny pošlou serveru, který kontroluje revize a případné konflikty. Aplikace ukazuje počet čekajících změn a umožní je vyřešit.
+Po výslovném zapnutí offline kopie umí otevřená přihlášená karta při výpadku spojení zobrazit naposledy uložené textové články. Bez ohledu na tuto volbu zařazuje změny přečtení, oblíbených a uložených položek do lokální fronty, aby se neztratily při přerušení připojení. Po obnovení spojení se změny pošlou serveru, který kontroluje revize a případné konflikty. Aplikace ukazuje počet čekajících změn a umožní je vyřešit. Při zapnutí offline kopie upozorňuje, že obsah a adresy zdrojů v IndexedDB nejsou šifrovány. Synchronizace používá generační značky změn a v podporovaných prohlížečích zámek pro více otevřených karet.
 
 **Nejde ještě o plný offline archiv:** po restartu prohlížeče bez internetu není možné bezpečně ověřit relaci; obrázky a video se neukládají. Detaily, zabezpečení a testy: [OFFLINE.md](docs/OFFLINE.md).
