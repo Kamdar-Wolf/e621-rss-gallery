@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { z } from "zod";
 import { addFeedSchema, canonicalFeedUrl, cursorSchema, entryStateSchema } from "../../../packages/shared/src/schemas.js";
 import { connectPool } from "./db.js";
 import { importOpml, exportOpml } from "./opml-service.js";
@@ -137,6 +138,40 @@ export function buildApp(pool: pg.Pool, apiToken: string) {
       [OWNER_ID]
     );
     return rows[0];
+  });
+
+  const searchSchema=z.object({
+    q:z.string().trim().min(2).max(150),
+    feedId:z.uuid().optional(),
+    limit:z.coerce.number().int().min(1).max(100).default(40),
+    before:z.iso.datetime({offset:true}).optional(),
+    beforeId:z.uuid().optional()
+  }).refine(args=>Boolean(args.before)===Boolean(args.beforeId),
+    "Search pagination requires both before and beforeId");
+
+  app.get("/v1/search", async (req,reply) => {
+    const parsed=searchSchema.safeParse(req.query);
+    if(!parsed.success)return reply.code(400).send({error:"Invalid search query"});
+    const {q,feedId,limit,before,beforeId}=parsed.data;
+    const {rows}=await pool.query(
+      `SELECT e.id,e.feed_id,e.source_url,e.title,e.author,e.summary,e.media_type,e.published_at,e.created_at,
+              es.read_at,es.starred_at,es.saved_at,
+              (SELECT m.source_url FROM entry_media m WHERE m.entry_id=e.id
+                ORDER BY m.position ASC LIMIT 1) AS thumbnail
+         FROM entries e
+         JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1
+         LEFT JOIN entry_states es ON es.entry_id=e.id AND es.user_id=$1
+        WHERE ($2::uuid IS NULL OR e.feed_id=$2::uuid)
+          AND to_tsvector('simple',COALESCE(e.title,'')||' '||COALESCE(e.summary,''))
+              @@ websearch_to_tsquery('simple',$3::text)
+          AND ($4::timestamptz IS NULL OR
+            (COALESCE(e.published_at,e.created_at),e.id)<($4::timestamptz,$5::uuid))
+        ORDER BY COALESCE(e.published_at,e.created_at) DESC,e.id DESC
+        LIMIT $6`,
+       [OWNER_ID,feedId||null,q,before||null,beforeId||null,limit]);
+    const last=rows.at(-1);
+    return {items:rows,nextCursor:rows.length===limit&&last?
+      {before:last.published_at||last.created_at,beforeId:last.id}:null};
   });
 
   app.get("/v1/entries", async (req,reply) => {
