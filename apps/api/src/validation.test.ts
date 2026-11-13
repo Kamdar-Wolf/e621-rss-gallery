@@ -12,7 +12,7 @@ test("accepts public addresses",()=>{
 });
 test("URL validation blocks non-http, credentials and private hosts",()=>{
   for(const url of ["file:///etc/passwd","http://localhost/rss","http://127.0.0.1","https://10.1.1.1/rss","https://user:pass@example.com/rss"]){
-    assert.throws(()=>normalizeFeedUrl(url),undefined,url);
+    assert.throws(()=>normalizeFeedUrl(url),{name:"Error"},url);
   }
   assert.equal(normalizeFeedUrl("https://www.example.com/rss#fragment"),"https://www.example.com/rss");
 });
