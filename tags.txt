@@ -2,7 +2,7 @@
 # Každý řádek = jedna značka. Znak ~ znamená OR (některá ze značek).
 # Pro přidání napiš novou značku na vlastní řádek; pro odebrání celý řádek smaž.
 # Řádky začínající # jsou jen komentáře; prázdné řádky se ignorují.
-# Nepřidávej sem celou URL, pouze značky. Nanejvýš 40 značek.
+# Nepřidávej sem celou URL, pouze značky. Až 320 značek: generátor je automaticky rozdělí do více dotazů.
 
 ~aaddcc
 ~anchee
