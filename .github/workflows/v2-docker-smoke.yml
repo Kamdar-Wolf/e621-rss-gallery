@@ -1,0 +1,44 @@
+name: Kamdar Reader v2 Docker smoke
+on:
+  push:
+    branches: [dev-v2]
+    paths:
+      - 'apps/**'
+      - 'compose.yaml'
+      - 'package.json'
+      - '.env.example'
+      - '.github/workflows/v2-docker-smoke.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure local-only development stack
+        run: cp .env.example .env
+      - name: Validate compose
+        run: docker compose config --quiet
+      - name: Build Docker images
+        run: docker compose build api worker web
+      - name: Start services
+        run: docker compose up -d db redis api worker web
+      - name: Validate API, database and UI
+        run: |
+          set -eu
+          ready=0
+          for i in $(seq 1 45); do
+            if curl -fsS http://127.0.0.1:3000/health | grep -q '"status":"ok"'; then ready=1; break; fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then echo "API did not start"; exit 1; fi
+          curl -fsS http://127.0.0.1:5173/ | grep -q 'Kamdar Reader 2.0'
+          echo "Docker smoke OK: PostgreSQL migration, API, worker, Vite UI"
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail 180
+      - name: Stop and remove local test volumes
+        if: always()
+        run: docker compose down -v
