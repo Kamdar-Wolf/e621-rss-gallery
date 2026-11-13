@@ -1,5 +1,5 @@
 import dns from "node:dns/promises";
-import type { LookupFunction } from "node:dns";
+import { lookup as nodeLookup } from "node:dns";
 import http from "node:http";
 import https from "node:https";
 import { isPublicIp, normalizeFeedUrl } from "./validation.js";
@@ -8,16 +8,16 @@ const MAX_BYTES = 3_000_000;
 const UA = "KamdarReader/0.2 (by Kamdar-Wolf; +https://github.com/Kamdar-Wolf/e621-rss-gallery)";
 export type Fetched = {status:number;body:string;etag:string|null;lastModified:string|null;url:string};
 
-const safeLookup: LookupFunction = (hostname, _options, callback) => {
+const safeLookup = ((hostname: string, _options: unknown, callback: (error: Error | null,address: string,family: number)=>void) => {
   void dns.lookup(hostname, {all:true,verbatim:true}).then(addresses=>{
     if(!addresses.length||addresses.some(address=>!isPublicIp(address.address))){
-      callback(new Error("Unsafe DNS target denied"),"","" as never);
+      callback(new Error("Unsafe DNS target denied"),"",4);
       return;
     }
     const address=addresses[0]!;
     callback(null,address.address,address.family);
   },(error:Error)=>callback(error,"",4));
-};
+}) as typeof nodeLookup;
 
 export async function fetchFeed(input:string,etag?:string|null,lastModified?:string|null,redirects=0):Promise<Fetched>{
   if(redirects>3)throw new Error("Too many HTTP redirects");
