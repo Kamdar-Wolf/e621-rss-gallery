@@ -1,2 +1,50 @@
-<!doctype html><html lang="cs"><head><meta charset="utf-8"><title>e621 RSS</title></head>
-<body><h1>e621 RSS</h1><p><a href="feed.xml">RSS kanál s náhledy obrázků</a></p></body></html>
+<!doctype html>
+<html lang="cs">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
+<title>e621 – RSS obrazová galerie</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,Segoe UI,sans-serif;background:#101219;color:#ecf0f7}
+*{box-sizing:border-box}body{margin:0}header{position:sticky;top:0;z-index:2;background:#191d27f5;border-bottom:1px solid #353d4a;padding:17px clamp(14px,4vw,42px);display:flex;gap:15px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+h1{font-size:20px;margin:0}header small{color:#aab3c4}a{color:#adccff}button{color:#f5f6fa;background:#273044;border:1px solid #424e65;padding:9px 13px;border-radius:9px;cursor:pointer}
+main{padding:15px clamp(12px,4vw,42px)}#status{color:#adb7c5;font-size:14px}
+#cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px}
+article{border:1px solid #303746;border-radius:12px;overflow:hidden;background:#1b2029}
+.media{height:240px;background:#11151b;display:flex;align-items:center;justify-content:center}
+.media img{width:100%;height:100%;object-fit:contain}
+.desc{padding:10px 12px}.desc h2{margin:0 0 8px;font-size:13px;font-weight:500;min-height:36px;line-height:1.4}
+.desc a{font-size:12px}.error{color:#ffc7c7;text-align:center;padding:12px;font-size:12px}
+@media(max-width:600px){#cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.media{height:170px}.desc h2{font-size:12px}}
+</style></head>
+<body>
+<header><div><h1>e621 přes git – obrázková galerie</h1><small>Přímé náhledy z e621, bez obrazového proxy Folo</small></div><div><a href="feed.xml">RSS XML</a> &nbsp; <button id="refresh">Obnovit</button></div></header>
+<main><p id="status">Načítám…</p><section id="cards"></section></main>
+<script>
+const status=document.getElementById("status"),cards=document.getElementById("cards");
+function el(tag,cls,txt){const e=document.createElement(tag);if(cls)e.className=cls;if(txt)e.textContent=txt;return e}
+async function load(){
+ cards.replaceChildren();status.textContent="Načítám RSS…";
+ try {
+  const r=await fetch("feed.xml?t="+Date.now(),{cache:"no-store"});if(!r.ok)throw Error("HTTP "+r.status);
+  const doc=new DOMParser().parseFromString(await r.text(),"text/xml");
+  if(doc.querySelector("parsererror"))throw Error("Neplatný RSS soubor");
+  const items=Array.from(doc.querySelectorAll("channel > item"));
+  let ok=0,fail=0;
+  for(const item of items){
+   const get=x=>item.querySelector(x)?.textContent||"";
+   const title=get("title"),link=get("link"),photo=item.querySelector("enclosure")?.getAttribute("url")||"";
+   const card=el("article"),media=el("div","media"),desc=el("div","desc");
+   if(photo){
+    const img=new Image();img.alt=title;img.loading="lazy";img.decoding="async";img.referrerPolicy="no-referrer";
+    img.onload=()=>{ok++;status.textContent=items.length+" příspěvků · načteno obrázků "+ok+" · chyb "+fail};
+    img.onerror=()=>{fail++;img.remove();media.appendChild(el("div","error","Obrázek se nepodařilo načíst. Použij odkaz na e621."));status.textContent=items.length+" příspěvků · načteno obrázků "+ok+" · chyb "+fail};
+    img.src=photo;media.appendChild(img);
+   }else{media.appendChild(el("div","error","RSS neobsahuje obrázek"))}
+   desc.appendChild(el("h2","",title));
+   const a=el("a","","Otevřít na e621");a.href=link;a.rel="noopener noreferrer";a.target="_blank";desc.appendChild(a);
+   card.append(media,desc);cards.appendChild(card);
+  }
+  status.textContent=items.length+" příspěvků; obrázky se načítají při posouvání.";
+ }catch(e){status.textContent="Chyba načítání: "+e.message}
+}
+document.getElementById("refresh").addEventListener("click",load);load();
+</script></body></html>
