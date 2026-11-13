@@ -24,7 +24,7 @@ if url:
         try:
             with urlopen(Request(target, headers=headers), timeout=18) as response:
                 part = response.read(16)
-                lines.append(f"{label}: HTTP {response.status}; Content-Type: {response.headers.get('Content-Type')}; first 16 bytes: {part.hex()}")
+                lines.append(f"{label}: HTTP {response.status}; Content-Type: {response.headers.get('Content-Type')}; CORP: {response.headers.get('Cross-Origin-Resource-Policy')}; CORS: {response.headers.get('Access-Control-Allow-Origin')}; COEP: {response.headers.get('Cross-Origin-Embedder-Policy')}; first 16 bytes: {part.hex()}")
         except HTTPError as e:
             lines.append(f"{label}: HTTP {e.code}; Content-Type: {e.headers.get('Content-Type')}")
         except (URLError, TimeoutError, OSError) as e:
