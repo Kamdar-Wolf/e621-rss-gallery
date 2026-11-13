@@ -1,5 +1,5 @@
 export interface Feed {
-  id:string;title:string;display_title:string;url:string;folder_id:string|null;
+  id:string;title:string;display_title:string;url:string;folder_id:string|null;folder_name:string|null;
   last_success_at:string|null;last_error:string|null;next_poll_at:string|null;
   last_checked_at:string|null;last_http_status:number|null;failure_count:number;
 }
