@@ -19,7 +19,7 @@ const parser = new XMLParser({
 function arr(x:unknown):unknown[] {return x===undefined||x===null?[]:Array.isArray(x)?x:[x];}
 function obj(x:unknown):Record<string,unknown> {return x!==null&&typeof x==="object"&&!Array.isArray(x)?x as Record<string,unknown>:{};}
 function val(x:unknown):string {
-  if(typeof x==="string"||typeof x==="number")return String(x).trim();
+  if(typeof x==="string"||typeof x==="number")return decode(String(x).trim());
   return val(obj(x)["#text"]);
 }
 function attr(x:unknown,name:string):string{return val(obj(x)["@_"+name]);}
@@ -48,6 +48,7 @@ function addMedia(medias:NormalizedMedia[],raw:string,mime:string|null,type:Medi
   medias.push({url,type:byMime,mime,position:medias.length});
 }
 function mediaFromHtml(media:NormalizedMedia[],html:string){
+  html=decode(html);
   const re=/<img\b[^>]*\b(?:src|data-src|data-original)\s*=\s*(['"])(.*?)\1/gi;
   let match:RegExpExecArray|null;
   while((match=re.exec(html))!==null&&media.length<32)
