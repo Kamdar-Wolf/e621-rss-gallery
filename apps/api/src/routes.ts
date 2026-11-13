@@ -115,7 +115,7 @@ export function apiRoutes(app:FastifyInstance) {
       if(media){
         if(!["image","article","audio","video"].includes(media))return reply.code(400).send({error:"Invalid media type"});
         args.push(media);
-        cond.push(`e.media_type=${args.length}`);
+        cond.push(`e.media_type=$${args.length}`);
       }
       if(cursor){
         let cursorData:{publishedAt:string;id:string};
@@ -124,7 +124,7 @@ export function apiRoutes(app:FastifyInstance) {
           if(!cursorData||!uuid(cursorData.id)||Number.isNaN(Date.parse(cursorData.publishedAt)))throw Error();
         }catch{return reply.code(400).send({error:"Invalid cursor"});}
         args.push(new Date(cursorData.publishedAt).toISOString(),cursorData.id);
-        cond.push(`(e.published_at,e.id)<(${args.length-1}::timestamptz,${args.length}::uuid)`);
+        cond.push(`(e.published_at,e.id)<($${args.length-1}::timestamptz,$${args.length}::uuid)`);
       }
       args.push(limit);
       const result=await pool.query(
