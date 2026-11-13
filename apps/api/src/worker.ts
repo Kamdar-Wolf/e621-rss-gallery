@@ -1,11 +1,11 @@
-import IORedis from "ioredis";
+import { Redis } from "ioredis";
 import {Queue, Worker} from "bullmq";
 import {config} from "./config.js";
 import {pool} from "./db.js";
 import {migrate} from "./migrate.js";
 import {ingestFeed} from "./ingest.js";
 
-const redis=new IORedis(config.redisUrl,{maxRetriesPerRequest:null});
+const redis=new Redis(config.redisUrl,{maxRetriesPerRequest:null});
 const queue=new Queue("feed-ingest",{connection:redis});
 const worker=new Worker("feed-ingest",async job=>{
   return ingestFeed(job.data.feedId as string);
