@@ -72,3 +72,22 @@ Na vývojové větvi probíhá TypeScript typecheck a unit testy. Databázové i
 5. Galerie/komiksy/podcasty a serverové automatizace.
 
 Detailní celkový plán: `../ROADMAP_V2_CZ.md`.
+
+
+## Nový frontend React (lokální vývoj)
+
+V `apps/web` je první grafický klient pro nové API. Běží samostatně na `http://127.0.0.1:5173/` a umí zobrazit odběry, položky, obrázkovou galerii, seznam, stav přečtení, hvězdičky, uložené příspěvky, statistiky, vyhledávání mezi načtenými položkami, přidat či odebrat zdroj a požádat worker o obnovení.
+
+Po spuštění Docker stacku v adresáři `v2` a instalaci npm balíčků:
+
+```bash
+npm run dev:web
+```
+
+Pro přístup zadej hodnotu svého vývojového `READER_API_TOKEN` z lokálního `.env`. Token je pouze v paměti otevřeného klienta (po opětovném načtení stránky je nutné jej zadat znovu). **Není určen pro veřejnou webovou aplikaci ani pro sdílení.** Po změnách v backendu jej bude potřeba nahradit bezpečným session přihlášením.
+
+```bash
+npm run build:web
+```
+
+Sestavení ověřuje, že UI lze přeložit a připravit ke statickému publikování. Nesmí se však nasazovat do veřejného hostingu bez produkční autentizace a správného backendu.
