@@ -12,7 +12,8 @@
     "migrate": "tsx scripts/migrate.ts",
     "test:integration": "tsx --test tests/integration/*.test.ts",
     "worker:once": "tsx apps/worker/src/main.ts --once",
-    "worker:watch": "tsx apps/worker/src/main.ts"
+    "worker:watch": "tsx apps/worker/src/main.ts",
+    "import:opml": "tsx scripts/import-opml.ts"
   },
   "engines": {
     "node": ">=22.12.0"

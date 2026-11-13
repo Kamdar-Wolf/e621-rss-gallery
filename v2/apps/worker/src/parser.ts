@@ -19,6 +19,7 @@ const parser = new XMLParser({
 function arr(x:unknown):unknown[] {return x===undefined||x===null?[]:Array.isArray(x)?x:[x];}
 function obj(x:unknown):Record<string,unknown> {return x!==null&&typeof x==="object"&&!Array.isArray(x)?x as Record<string,unknown>:{};}
 function val(x:unknown):string {
+  if(x===null||x===undefined||x===false||x===true)return "";
   if(typeof x==="string"||typeof x==="number")return decode(String(x).trim());
   return val(obj(x)["#text"]);
 }
