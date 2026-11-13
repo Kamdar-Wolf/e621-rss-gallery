@@ -9,7 +9,7 @@ export type NormalizedEntry={
 export type NormalizedFeed={title:string;description:string;entries:NormalizedEntry[]};
 
 const xmlParser=new XMLParser({
-  ignoreAttributes:false,attributeNamePrefix:"@",trimValues:true,parseTagValue:false,
+  ignoreAttributes:false,attributeNamePrefix:"@_",trimValues:true,parseTagValue:false,
   parseAttributeValue:false,processEntities:false,removeNSPrefix:false,
 });
 const arr=(v:unknown):unknown[]=>v===undefined||v===null?[]:Array.isArray(v)?v:[v];
@@ -26,6 +26,7 @@ const safe=(u:unknown,base?:string):string|null=>{
   try{const x=new URL(String(u),base);return x.protocol==="https:"||x.protocol==="http:"?x.href:null;}
   catch{return null;}
 };
+const decodeHtml=(s:string)=>s.replace(/&lt;/gi,"<").replace(/&gt;/gi,">").replace(/&quot;/gi,'"').replace(/&apos;/gi,"\'").replace(/&amp;/gi,"&");
 const htmlImage=(s:string,base?:string):string|null=>{
   const match=/<img\b[^>]*?\b(?:src|data-src)\s*=\s*["']([^"'<>]+)["']/i.exec(s);
   return safe(match?.[1],base);
