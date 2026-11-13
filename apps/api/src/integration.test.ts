@@ -29,6 +29,21 @@ test("bootstrap, CSRF, subscriptions, entry states and sync cursor",{
     assert.equal((opml.json() as {imported:number}).imported,1,"OPML channel must be imported");
     const item=await pool.query<{id:string}>(`INSERT INTO entries(feed_id,guid,title,published_at) VALUES($1,'test-guid','Example entry',now()) RETURNING id`,[id]);
     const entryId=item.rows[0]!.id;
+    await pool.query(`INSERT INTO entries(feed_id,guid,title,published_at,media_type) VALUES($1,'test-guid-older','Older image entry',now()-interval '1 hour','image')`,[id]);
+    const paged=await app.inject({method:"GET",url:"/api/v1/entries?limit=1",headers:{cookie:auth.cookie}});
+    assert.equal(paged.statusCode,200,paged.body);
+    const cursor=(paged.json() as {nextCursor:string}).nextCursor;
+    assert.ok(cursor,"first page must provide cursor");
+    const page2=await app.inject({method:"GET",url:"/api/v1/entries?limit=1&cursor="+encodeURIComponent(cursor),headers:{cookie:auth.cookie}});
+    assert.equal(page2.statusCode,200,page2.body);
+    assert.equal((page2.json() as {entries:{title:string}[]}).entries[0]?.title,"Older image entry");
+    const images=await app.inject({method:"GET",url:"/api/v1/entries?media=image",headers:{cookie:auth.cookie}});
+    assert.equal(images.statusCode,200,images.body);
+    assert.equal((images.json() as {entries:unknown[]}).entries.length,1);
+    const exported=await app.inject({method:"GET",url:"/api/v1/feeds/export",headers:{cookie:auth.cookie}});
+    assert.equal(exported.statusCode,200,exported.body);
+    assert.match(exported.body,/xmlUrl="https:\/\/example.org\/feed.xml"/);
+
     const get=await app.inject({method:"GET",url:"/api/v1/entries",headers:{cookie:auth.cookie}});
     assert.equal(get.statusCode,200,get.body);
     assert.ok((get.json() as {entries:{id:string}[]}).entries.some(e=>e.id===entryId));
