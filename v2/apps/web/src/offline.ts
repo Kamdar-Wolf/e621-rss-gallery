@@ -1,9 +1,9 @@
 import type {Entry,Feed,Stats} from "./api.js";
-import {deleteVault,getVaultSnapshot,isVaultUnlocked,saveVaultSnapshot} from "./offline-vault.js";
+import {deleteVault,getVaultSnapshot,isVaultUnlocked,saveVaultSnapshot,
+  getEncryptedQueue,mutateEncryptedQueue} from "./offline-vault.js";
 
 const DB_NAME="kamdar-reader-offline";
-const DB_VERSION=3;
-const CACHE_LIMIT=500;
+const DB_VERSION=4;
 const OP_LIMIT=1500;
 
 export type OfflineField="read"|"starred"|"saved";
@@ -46,7 +46,7 @@ function openDB():Promise<IDBDatabase>{
           db.createObjectStore("snapshots",{keyPath:"userId"});
         // The old development build cached personal feed URLs without opt-in.
         // Wipe those legacy snapshots during the privacy migration.
-        if(req.transaction && event.oldVersion<3){
+        if(req.transaction && event.oldVersion<4){
           // Never retain old plaintext RSS snapshots from v1/v2.
           req.transaction.objectStore("snapshots").clear();
           if(db.objectStoreNames.contains("prefs"))
@@ -106,16 +106,49 @@ export async function cacheSnapshot(
   validUser(userId);
   await saveVaultSnapshot(userId,feeds,entries,stats);
 }
-export async function getChanges(userId:string):Promise<QueuedChange[]>{
+/** Legacy v3 queue stays readable only for one-time migration; new changes never write here. */
+export async function legacyChangeCount(userId:string):Promise<number>{
   validUser(userId);
   const db=await openDB();
   return new Promise((resolve,reject)=>{
     const tx=db.transaction("queue","readonly");
-    const req=tx.objectStore("queue").index("byUser").getAll(userId);
-    req.onsuccess=()=>resolve((req.result as QueuedChange[])
-      .sort((a,b)=>a.createdAt-b.createdAt||a.id.localeCompare(b.id)));
+    const req=tx.objectStore("queue").index("byUser").count(userId);
+    req.onsuccess=()=>resolve(req.result);
     req.onerror=()=>reject(req.error);
   });
+}
+/** Encrypt all legacy rows first; only then erase the unencrypted originals. */
+export async function migrateLegacyQueue(userId:string):Promise<number>{
+  validUser(userId);
+  if(!isVaultUnlocked(userId))throw Error("Pro převod fronty musí být trezor odemčen.");
+  const db=await openDB();
+  const prior=await new Promise<QueuedChange[]>((resolve,reject)=>{
+    const tx=db.transaction("queue","readonly");
+    const req=tx.objectStore("queue").index("byUser").getAll(userId);
+    req.onsuccess=()=>resolve(req.result as QueuedChange[]);
+    req.onerror=()=>reject(req.error);
+  });
+  if(!prior.length)return 0;
+  await mutateEncryptedQueue(userId,current=>{
+    const byId=new Map(prior.map(row=>[row.id,row]));
+    // Never replace more recent already-encrypted changes with older plaintext.
+    for(const row of current)byId.set(row.id,row);
+    return {items:[...byId.values()],result:undefined};
+  });
+  const tx=db.transaction("queue","readwrite");
+  const finishedTx=finished(tx);
+  const cursor=tx.objectStore("queue").index("byUser").openCursor(userId);
+  cursor.onsuccess=()=>{
+    const row=cursor.result;
+    if(row){row.delete();row.continue();}
+  };
+  await finishedTx;
+  return prior.length;
+}
+export async function getChanges(userId:string):Promise<QueuedChange[]>{
+  validUser(userId);
+  return (await getEncryptedQueue(userId))
+    .sort((a,b)=>a.createdAt-b.createdAt||a.id.localeCompare(b.id));
 }
 function stateColumn(field:OfflineField):"read_at"|"starred_at"|"saved_at"{
   return field==="read"?"read_at":field==="starred"?"starred_at":"saved_at";
@@ -137,110 +170,76 @@ export function overlayChanges(entries:Entry[],changes:QueuedChange[]):Entry[]{
 }
 export async function queueChange(userId:string,entry:Entry,field:OfflineField,desired:boolean):Promise<void>{
   const id=opId(userId,entry.id,field);
-  const db=await openDB();
-  const tx=db.transaction("queue","readwrite");
-  const done=finished(tx);
-  const store=tx.objectStore("queue");
-  const req=store.get(id);
-  let quotaExceeded=false;
-  req.onsuccess=()=>{
-    const previous=req.result as QueuedChange|undefined;
+  await mutateEncryptedQueue(userId,items=>{
+    const previous=items.find(item=>item.id===id);
     const baseValue=previous?.baseValue??Boolean(entry[stateColumn(field)]);
-    const now=Date.now();
     if(desired===baseValue&&!previous?.inFlight){
-      // Cancel only if the preceding change has never been sent.
-      if(previous)store.delete(id);
-      return;
+      return {items:items.filter(item=>item.id!==id),result:undefined};
     }
-    const persist=()=>store.put({
+    if(!previous&&items.length>=OP_LIMIT)
+      throw Error("Offline fronta má limit "+OP_LIMIT+" změn. Nejprve synchronizuj.");
+    const now=Date.now();
+    const record:QueuedChange={
       id,userId,entryId:entry.id,field,desired,baseValue,
       expectedRevision:previous?.expectedRevision??Number(entry.revision||0),
       generation:(previous?.generation??0)+1,inFlight:false,
       createdAt:previous?.createdAt??now,updatedAt:now,status:"pending"
-    } satisfies QueuedChange);
-    if(previous)persist();
-    else{
-      const count=store.index("byUser").count(userId);
-      count.onsuccess=()=>{
-        if(count.result>=OP_LIMIT){quotaExceeded=true;tx.abort();}
-        else persist();
-      };
-    }
-  };
-  try{await done;}
-  catch(error){
-    if(quotaExceeded)throw Error("Offline fronta má limit "+OP_LIMIT+" změn. Nejprve synchronizuj.");
-    throw error;
-  }
+    };
+    return {items:[...items.filter(item=>item.id!==id),record],result:undefined};
+  });
 }
-/** Persist in-flight marker before HTTP so a reversal cannot silently disappear. */
+/** Persist in-flight marker before HTTP to preserve concurrent edits. */
 async function markSending(op:QueuedChange):Promise<void>{
-  const db=await openDB();
-  const tx=db.transaction("queue","readwrite");
-  const done=finished(tx);
-  const store=tx.objectStore("queue");
-  const req=store.get(op.id);
-  req.onsuccess=()=>{
-    const current=req.result as QueuedChange|undefined;
-    if(current && current.generation===op.generation)
-      store.put({...current,inFlight:true} satisfies QueuedChange);
-  };
-  await done;
+  const userId=op.userId;
+  await mutateEncryptedQueue(userId,items=>({
+    items:items.map(item=>item.id===op.id&&item.generation===op.generation
+      ?{...item,inFlight:true}:item),result:undefined
+  }));
 }
 async function updateIfCurrent(op:QueuedChange,action:"delete"|"conflict"|"rebase",
   remote?:RemoteState):Promise<boolean>{
-  const db=await openDB();
-  const tx=db.transaction("queue","readwrite");
-  const done=finished(tx);
-  let changed=false;
-  const store=tx.objectStore("queue");
-  const req=store.get(op.id);
-  req.onsuccess=()=>{
-    const current=req.result as QueuedChange|undefined;
-    if(!current)return;
+  return mutateEncryptedQueue(op.userId,items=>{
+    const current=items.find(item=>item.id===op.id);
+    if(!current)return {items,result:false};
     if(current.generation!==op.generation||current.desired!==op.desired){
-      // A later edit arrived while the old request was in flight.
-      // Rebase that intent against the server acknowledgement, never discard it.
-      if(action==="delete" && remote){
+      if(action==="delete"&&remote){
         const serverValue=Boolean(remote[stateColumn(op.field)]);
-        if(current.desired===serverValue)store.delete(op.id);
-        else store.put({...current,baseValue:serverValue,
-          expectedRevision:Number(remote.revision),inFlight:false,
-          status:"pending"} satisfies QueuedChange);
+        if(current.desired===serverValue)
+          return {items:items.filter(item=>item.id!==op.id),result:false};
+        return {items:items.map(item=>item.id===op.id?{
+          ...item,baseValue:serverValue,expectedRevision:Number(remote.revision),
+          inFlight:false,status:"pending" as const
+        }:item),result:false};
       }
-      return;
+      return {items,result:false};
     }
-    changed=true;
-    if(action==="delete")store.delete(op.id);
-    else if(remote){
-      store.put({...current,
-        expectedRevision:Number(remote.revision),
-        baseValue:Boolean(remote[stateColumn(op.field)]),
-        remoteRevision:Number(remote.revision),
-        remoteValue:Boolean(remote[stateColumn(op.field)]),
-        status:action==="conflict"?"conflict":"pending"} satisfies QueuedChange);
-    }
-  };
-  await done;
-  return changed;
+    if(action==="delete")
+      return {items:items.filter(item=>item.id!==op.id),result:true};
+    if(!remote)return {items,result:false};
+    return {items:items.map(item=>item.id===op.id?{
+      ...item,expectedRevision:Number(remote.revision),
+      baseValue:Boolean(remote[stateColumn(op.field)]),
+      remoteRevision:Number(remote.revision),
+      remoteValue:Boolean(remote[stateColumn(op.field)]),
+      inFlight:false,status:action==="conflict"?"conflict" as const:"pending" as const
+    }:item),result:true};
+  });
 }
 export async function resolveConflict(id:string,choice:"server"|"local"):Promise<void>{
-  const db=await openDB();
-  const tx=db.transaction("queue","readwrite");
-  const done=finished(tx);
-  const store=tx.objectStore("queue");
-  const req=store.get(id);
-  req.onsuccess=()=>{
-    const item=req.result as QueuedChange|undefined;
-    if(!item||item.status!=="conflict")return;
-    if(choice==="server"||item.desired===item.remoteValue){
-      store.delete(id);return;
-    }
-    store.put({...item,status:"pending",baseValue:Boolean(item.remoteValue),
+  const userId=id.split(":")[0];
+  validUser(userId);
+  await mutateEncryptedQueue(userId,items=>{
+    const current=items.find(item=>item.id===id);
+    if(!current||current.status!=="conflict")
+      return {items,result:undefined};
+    if(choice==="server"||current.desired===current.remoteValue)
+      return {items:items.filter(item=>item.id!==id),result:undefined};
+    return {items:items.map(item=>item.id===id?{
+      ...item,status:"pending" as const,baseValue:Boolean(item.remoteValue),
       expectedRevision:Number(item.remoteRevision||0),updatedAt:Date.now(),
-      generation:(item.generation??0)+1} satisfies QueuedChange);
-  };
-  await done;
+      generation:(item.generation??0)+1,inFlight:false
+    }:item),result:undefined};
+  });
 }
 export async function flushChanges(userId:string,
   send:(op:QueuedChange)=>Promise<SendResult>):Promise<FlushResult>{
