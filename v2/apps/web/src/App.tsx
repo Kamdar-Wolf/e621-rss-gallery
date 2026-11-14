@@ -1,8 +1,9 @@
 import {useCallback,useEffect,useMemo,useRef,useState, type ChangeEvent, type FormEvent} from "react";
 import {api,ApiError,type AuthSession,type SyncPage,type Feed,type Entry,type EntryPage,type Cursor,type Stats} from "./api.js";
 import {cacheSnapshot,clearOfflineUser,flushChanges,getChanges,getSnapshot,overlayChanges,
-  getCachePreference,queueChange,resolveConflict,type QueuedChange,type OfflineField,type RemoteState} from "./offline.js";
-import {createVault,unlockVault,deleteVault,listVaultProfiles,vaultExists,lockVault,
+  getCachePreference,queueChange,resolveConflict,legacyChangeCount,migrateLegacyQueue,
+  type QueuedChange,type OfflineField,type RemoteState} from "./offline.js";
+import {createVault,unlockVault,deleteVault,listVaultProfiles,vaultExists,lockVault,isVaultUnlocked,
   type VaultProfile} from "./offline-vault.js";
 
 type FolderView="all"|"unread"|"starred"|"saved";
@@ -395,14 +396,10 @@ export function App(){
   async function logout(){
     if(offlineUnlocked&&!token){lockLocalLibrary();return;}
     const user=currentUser.current;
-    const pending=user?(await getChanges(user).catch(()=>[])):[];
-    const warning=pending.length
-      ?"Odhlášením smažeš "+pending.length+" neodeslaných změn a všechny offline články. Pokračovat?"
-      :"Odhlášením odstraníš offline články tohoto účtu z prohlížeče. Pokračovat?";
-    if(!window.confirm(warning))return;
     try{
       await api(token,"/v1/auth/logout",{method:"POST"});
-      if(user)await clearOfflineUser(user);
+      // Keep the encrypted vault for later offline access. Do not silently
+      // destroy pending changes on routine online sign-out.
       lockVault(user);
       currentUser.current="";setUserId("");setToken("");setSessionUser("");
       setEntries([]);setFeeds([]);setQueueItems([]);setOffline(false);setCacheAllowed(false);
@@ -410,7 +407,7 @@ export function App(){
       syncCursor.current={after:new Date(Date.now()-60_000).toISOString(),
         afterId:"00000000-0000-0000-0000-000000000000"};
     }catch(error){
-      setError(error instanceof Error?error.message:"Odhlášení selhalo; offline data nebyla smazána.");
+      setError(error instanceof Error?error.message:"Odhlášení se nezdařilo.");
     }
   }
   useEffect(()=>{
@@ -438,7 +435,9 @@ export function App(){
     try{
       if(!selectedVault)throw Error("Vyber offline profil.");
       const {profile,snapshot}=await unlockVault(selectedVault,unlockPhrase);
+      const migrated=await migrateLegacyQueue(profile.userId);
       const pending=await getChanges(profile.userId);
+      if(migrated)setNotice("Převedeno "+migrated+" starších změn do šifrované fronty.");
       currentUser.current=profile.userId;
       setUserId(profile.userId);setSessionUser(profile.handle);
       setToken("");setOfflineUnlocked(true);setCacheAllowed(true);
@@ -464,11 +463,14 @@ export function App(){
       }else{
         await unlockVault(user,vaultPhrase);
       }
+      const migrated=await migrateLegacyQueue(user);
       setVaultDialog(null);setVaultPhrase("");setVaultRepeat("");
       setCacheAllowed(true);
       setVaultProfiles(await listVaultProfiles());
       await load(token,feedId);
-      setNotice("Zašifrovaná offline knihovna je připravená. Offline heslo si bezpečně uschovej.");
+      setNotice("Zašifrovaná offline knihovna je připravená. "+
+        (migrated?"Převedeno "+migrated+" starších změn. ":"")+
+        "Offline heslo si bezpečně uschovej.");
     }catch(error){
       setError(error instanceof Error?error.message:"Offline trezor nelze nastavit.");
     }finally{setVaultBusy(false);}
@@ -479,18 +481,44 @@ export function App(){
     if(!user)return;
     const column=key==="read"?"read_at":key==="starred"?"starred_at":"saved_at";
     const desired=!Boolean(entry[column]);
+    if(!isVaultUnlocked(user)){
+      // No local secret means never write pending changes as plaintext.
+      if(!token||!navigator.onLine){
+        setError("Pro změny bez internetu nejdříve odemkni šifrovaný trezor.");
+        return;
+      }
+      try{
+        const result=await api<{state:RemoteState}>(token,
+          "/v1/entries/"+entry.id+"/state",{
+            method:"PATCH",body:JSON.stringify({
+              [key]:desired,expectedRevision:Number(entry.revision||0)
+            })
+          });
+        const updated:Entry={...entry,read_at:result.state.read_at,
+          starred_at:result.state.starred_at,saved_at:result.state.saved_at,
+          revision:Number(result.state.revision),state_updated_at:result.state.updated_at};
+        setEntries(rows=>rows.map(item=>item.id===entry.id?updated:item));
+        setRemoteResults(rows=>rows?rows.map(item=>item.id===entry.id?updated:item):rows);
+        setActive(item=>item?.id===entry.id?updated:item);
+      }catch(error){
+        setError(error instanceof Error?error.message:"Změnu se nepodařilo uložit.");
+        void load(token,feedId);
+      }
+      return;
+    }
     const next={...entry,[column]:desired?new Date().toISOString():null};
-    setEntries(previous=>previous.map(item=>item.id===entry.id?next:item));
-    setRemoteResults(previous=>previous?previous.map(item=>item.id===entry.id?next:item):previous);
-    setActive(previous=>previous?.id===entry.id?next:previous);
     try{
+      // Persist first. If IndexedDB/encryption fails, do not show success.
       await queueChange(user,entry,key,desired);
+      setEntries(previous=>previous.map(item=>item.id===entry.id?next:item));
+      setRemoteResults(previous=>previous?
+        previous.map(item=>item.id===entry.id?next:item):previous);
+      setActive(previous=>previous?.id===entry.id?next:previous);
       await refreshQueue(user);
       if(token&&navigator.onLine)void flushOffline(token,user);
-      else{setOffline(true);setNotice("Změna uložena offline. Odešle se po obnovení spojení.");}
+      else{setOffline(true);setNotice("Změna zašifrována. Odešle se po obnovení spojení.");}
     }catch(error){
-      setError(error instanceof Error?error.message:"Offline změnu nelze uložit");
-      void load(token,feedId);
+      setError(error instanceof Error?error.message:"Změnu nelze zašifrovat.");
     }
   }
   async function decideConflict(change:QueuedChange,choice:"local"|"server"){
@@ -509,8 +537,15 @@ export function App(){
     setError("");
     try{
       if(cacheAllowed){
-        if(!window.confirm("Smazat zašifrovaný offline trezor? "+
-          "Neodeslané změny zůstanou ve frontě. Bez zálohy už obsah neobnovíš."))return;
+        const unsent=await getChanges(user);
+        if(unsent.length){
+          setError("Trezor obsahuje "+unsent.length+" neodeslaných změn. "+
+            "Nejdříve je synchronizuj. Pro trvalé odstranění včetně změn "+
+            "použij samostatné tlačítko Smazat offline data.");
+          return;
+        }
+        if(!window.confirm("Smazat zašifrovanou offline knihovnu? "+
+          "Bez zálohy už obsah neobnovíš."))return;
         await deleteVault(user);
         setCacheAllowed(false);
         setVaultProfiles(await listVaultProfiles());
