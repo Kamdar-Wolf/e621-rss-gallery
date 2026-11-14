@@ -1,5 +1,7 @@
 import {useEffect,useMemo,useState} from "react";
 import {api,type EntryMedia,type EntryMediaPage} from "./api.js";
+import {cacheImage,cachedImages,deleteCachedImage,isVaultUnlocked,
+  type CachedImage} from "./offline-vault.js";
 
 export function safeMediaUrl(raw:string|null|undefined):string|null{
   if(!raw||raw.length>4096)return null;
@@ -28,14 +30,19 @@ export function normalizedGallery(items:EntryMedia[],fallback:string|null):Entry
   return result;
 }
 type Props={entryId:string;title:string;preview:string|null;
-  csrf:string;offline:boolean;onError?:(message:string)=>void};
-export function MediaGallery({entryId,title,preview,csrf,offline,onError}:Props){
+  csrf:string;offline:boolean;userId:string;onError?:(message:string)=>void};
+export function MediaGallery({entryId,title,preview,csrf,offline,userId,onError}:Props){
   const [items,setItems]=useState<EntryMedia[]>([]);
   const [loading,setLoading]=useState(false);
   const [current,setCurrent]=useState(0);
   const [zoom,setZoom]=useState(false);
   const [magnified,setMagnified]=useState(false);
   const [failed,setFailed]=useState<string[]>([]);
+  const [cachedRows,setCachedRows]=useState<CachedImage[]>([]);
+  const [localMedia,setLocalMedia]=useState<EntryMedia[]>([]);
+  const [mediaRevision,setMediaRevision]=useState(0);
+  const [saving,setSaving]=useState(false);
+  const [cacheNotice,setCacheNotice]=useState("");
   useEffect(()=>{
     setItems([]);setCurrent(0);setZoom(false);setMagnified(false);setFailed([]);
     if(offline||!csrf)return;
@@ -48,7 +55,57 @@ export function MediaGallery({entryId,title,preview,csrf,offline,onError}:Props)
       }).finally(()=>{if(live)setLoading(false);});
     return()=>{live=false;};
   },[entryId,csrf,offline]);
-  const gallery=useMemo(()=>normalizedGallery(items,loading?null:preview),[items,loading,preview]);
+  useEffect(()=>{
+    let live=true;
+    const urls:string[]=[];
+    setCachedRows([]);setLocalMedia([]);setCacheNotice("");
+    if(!userId||!isVaultUnlocked(userId))return;
+    void cachedImages(userId,entryId).then(images=>{
+      if(!live)return;
+      setCachedRows(images);
+      if(offline)setLocalMedia(images.map(image=>{
+        const url=URL.createObjectURL(image.blob);
+        urls.push(url);
+        return {id:image.id,url,kind:"image" as const,mimeType:image.mimeType,
+          position:image.position,width:null,height:null};
+      }));
+    }).catch(error=>{
+      if(live)onError?.(error instanceof Error?error.message:
+        "Offline kopie obrázků je poškozená.");
+    });
+    return()=>{live=false;for(const url of urls)URL.revokeObjectURL(url);};
+  },[entryId,userId,offline,mediaRevision]);
+  const gallery=useMemo(()=>offline?localMedia:
+    normalizedGallery(items,loading?null:preview),
+    [offline,localMedia,items,loading,preview]);
+  const canSave=!offline&&!!csrf&&!!userId&&isVaultUnlocked(userId);
+  async function saveCurrent(){
+    if(!active||active.kind!=="image"||!canSave)return;
+    setSaving(true);setCacheNotice("");
+    try{
+      const result=await cacheImage(userId,entryId,active.url,active.position);
+      setCacheNotice("Obrázek zašifrován: "+(result.bytes/1048576).toFixed(2)+" MiB.");
+      setMediaRevision(value=>value+1);
+    }catch(error){
+      setCacheNotice((error instanceof Error?error.message:"Uložení obrázku selhalo.")+
+        " Zdroj musí povolit CORS stažení.");
+    }finally{setSaving(false);}
+  }
+  async function removeCurrent(){
+    if(!active||!userId||!isVaultUnlocked(userId))return;
+    const row=offline?cachedRows.find(x=>x.id===active.id):
+      cachedRows.find(x=>x.url===active.url);
+    if(!row)return;
+    setSaving(true);setCacheNotice("");
+    try{
+      await deleteCachedImage(userId,row.id);
+      setCacheNotice("Offline kopie odstraněna.");
+      setCurrent(0);setMediaRevision(value=>value+1);
+    }catch(error){
+      setCacheNotice(error instanceof Error?error.message:"Soubor nelze odstranit.");
+    }finally{setSaving(false);}
+  }
+
   const index=Math.min(current,Math.max(gallery.length-1,0));
   const active=gallery[index];
   const available=active&&!failed.includes(active.url);
@@ -73,8 +130,8 @@ export function MediaGallery({entryId,title,preview,csrf,offline,onError}:Props)
     window.addEventListener("keydown",onKey,true);
     return()=>window.removeEventListener("keydown",onKey,true);
   },[zoom,gallery.length]);
-  if(offline)return <div className="media-empty" role="status">
-    Obrázky a videa zatím nejsou uložené offline. Text článku zůstává dostupný.
+  if(offline&&!gallery.length)return <div className="media-empty" role="status">
+    Pro tento příspěvek není uložený žádný offline obrázek. Text zůstává dostupný.
   </div>;
   if(loading)return <div className="media-empty" role="status">Načítám přílohy…</div>;
   if(!gallery.length)return <div className="media-empty">Zdroj nemá obrazové ani zvukové přílohy.</div>;
@@ -107,10 +164,19 @@ export function MediaGallery({entryId,title,preview,csrf,offline,onError}:Props)
         {active.width&&active.height?" · "+active.width+" × "+active.height:""}
       </span>
       <a href={active.url} target="_blank" rel="noopener noreferrer">
-        Otevřít originální soubor</a>
+        {offline?"Otevřít offline kopii":"Otevřít originální soubor"}</a>
+      {canSave&&active.kind==="image"&&!cachedRows.some(image=>image.url===active.url)?
+        <button type="button" disabled={saving} onClick={()=>void saveCurrent()}>
+          {saving?"Ukládám…":"Uložit obrázek offline"}</button>:null}
+      {active.kind==="image"&&(offline?
+        cachedRows.some(image=>image.id===active.id):
+        cachedRows.some(image=>image.url===active.url))?
+        <button type="button" disabled={saving} onClick={()=>void removeCurrent()}>
+          Odebrat offline kopii</button>:null}
       {active.kind==="image"&&available?<button type="button"
         onClick={()=>setZoom(true)}>Celá obrazovka</button>:null}
     </div>
+    {cacheNotice?<p className="media-cache-notice" role="status">{cacheNotice}</p>:null}
     {gallery.length>1?<div className="media-strip" role="group" aria-label="Výběr přílohy">
       {gallery.map((item,i)=><button type="button" key={item.id+"-"+i}
         className={index===i?"selected":""}
