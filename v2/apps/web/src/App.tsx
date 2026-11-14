@@ -1,8 +1,9 @@
 import {useCallback,useEffect,useMemo,useRef,useState, type ChangeEvent, type FormEvent} from "react";
 import {api,ApiError,type AuthSession,type SyncPage,type Feed,type Entry,type EntryPage,type Cursor,type Stats} from "./api.js";
 import {cacheSnapshot,clearOfflineUser,flushChanges,getChanges,getSnapshot,overlayChanges,
-  getCachePreference,setCachePreference,
-  queueChange,resolveConflict,type QueuedChange,type OfflineField,type RemoteState} from "./offline.js";
+  getCachePreference,queueChange,resolveConflict,type QueuedChange,type OfflineField,type RemoteState} from "./offline.js";
+import {createVault,unlockVault,deleteVault,listVaultProfiles,vaultExists,lockVault,
+  type VaultProfile} from "./offline-vault.js";
 
 type FolderView="all"|"unread"|"starred"|"saved";
 type Layout="gallery"|"cards"|"list";
@@ -54,6 +55,14 @@ export function App(){
   const flushing=useRef(false);
   const [offline,setOffline]=useState(false);
   const [cacheAllowed,setCacheAllowed]=useState(false);
+  const [offlineUnlocked,setOfflineUnlocked]=useState(false);
+  const [vaultProfiles,setVaultProfiles]=useState<VaultProfile[]>([]);
+  const [selectedVault,setSelectedVault]=useState("");
+  const [unlockPhrase,setUnlockPhrase]=useState("");
+  const [vaultDialog,setVaultDialog]=useState<"create"|"unlock"|null>(null);
+  const [vaultPhrase,setVaultPhrase]=useState("");
+  const [vaultRepeat,setVaultRepeat]=useState("");
+  const [vaultBusy,setVaultBusy]=useState(false);
   const [queueItems,setQueueItems]=useState<QueuedChange[]>([]);
   const [token,setToken]=useState("");
   const [loading,setLoading]=useState(false);
@@ -95,6 +104,20 @@ export function App(){
     const user=currentUser.current;
     if(!user)return;
     setError("");setLoading(true);
+    if(!auth){
+      try{
+        const cached=await getSnapshot(user);
+        if(!cached)throw Error("Offline trezor je zamčený nebo prázdný.");
+        const queue=await getChanges(user);
+        setFeeds(cached.feeds);
+        setEntries(overlayChanges(
+          cached.entries.filter(entry=>!selected||entry.feed_id===selected),queue));
+        setStats(cached.stats);setQueueItems(queue);setCursor(null);setOffline(true);
+      }catch(error){
+        setError(error instanceof Error?error.message:"Offline data nelze otevřít.");
+      }finally{setLoading(false);}
+      return;
+    }
     try{
       const query=new URLSearchParams({limit:"100"});
       if(selected)query.set("feedId",selected);
@@ -152,7 +175,7 @@ export function App(){
     }finally{if(currentUser.current===user)setLoading(false);}
   },[]);
 
-  useEffect(()=>{if(token&&userId)void load(token,feedId);},[token,userId,feedId,load]);
+  useEffect(()=>{if((token||offlineUnlocked)&&userId)void load(token,feedId);},[token,offlineUnlocked,userId,feedId,load]);
 
   // Database-wide search, debounced to avoid one request per keystroke.
   useEffect(()=>{
@@ -356,11 +379,20 @@ export function App(){
         method:"POST",body:JSON.stringify({username:usernameInput,password:passwordInput})});
       currentUser.current=session.user.id;
       setUserId(session.user.id);
+      setOfflineUnlocked(false);
       setToken(session.csrf);setSessionUser(session.user.handle);setPasswordInput("");
     }catch(err){setError(err instanceof Error?err.message:"Přihlášení zamítnuto");}
     finally{setLoading(false);}
   }
+  function lockLocalLibrary(){
+    lockVault(currentUser.current);
+    currentUser.current="";setUserId("");setToken("");setSessionUser("");
+    setEntries([]);setFeeds([]);setQueueItems([]);setCursor(null);
+    setOfflineUnlocked(false);setCacheAllowed(false);setOffline(false);
+    setActive(null);setSearch("");setNotice("");
+  }
   async function logout(){
+    if(offlineUnlocked&&!token){lockLocalLibrary();return;}
     const user=currentUser.current;
     const pending=user?(await getChanges(user).catch(()=>[])):[];
     const warning=pending.length
@@ -370,8 +402,10 @@ export function App(){
     try{
       await api(token,"/v1/auth/logout",{method:"POST"});
       if(user)await clearOfflineUser(user);
+      lockVault(user);
       currentUser.current="";setUserId("");setToken("");setSessionUser("");
       setEntries([]);setFeeds([]);setQueueItems([]);setOffline(false);setCacheAllowed(false);
+      setOfflineUnlocked(false);setVaultProfiles(await listVaultProfiles());
       syncCursor.current={after:new Date(Date.now()-60_000).toISOString(),
         afterId:"00000000-0000-0000-0000-000000000000"};
     }catch(error){
@@ -381,13 +415,63 @@ export function App(){
   useEffect(()=>{
     let mounted=true;
     void api<AuthSession>("","/v1/auth/session").then(session=>{
-      if(mounted){
+      if(mounted&&!currentUser.current){
         currentUser.current=session.user.id;setUserId(session.user.id);
         setToken(session.csrf);setSessionUser(session.user.handle);
       }
     }).catch(()=>{});
     return()=>{mounted=false;};
   },[]);
+  useEffect(()=>{
+    let live=true;
+    void listVaultProfiles().then(profiles=>{
+      if(!live)return;
+      setVaultProfiles(profiles);
+      setSelectedVault(current=>current||profiles[0]?.userId||"");
+    }).catch(()=>{});
+    return()=>{live=false;};
+  },[]);
+
+  async function openOfflineLibrary(event:FormEvent){
+    event.preventDefault();setError("");setLoading(true);
+    try{
+      if(!selectedVault)throw Error("Vyber offline profil.");
+      const {profile,snapshot}=await unlockVault(selectedVault,unlockPhrase);
+      const pending=await getChanges(profile.userId);
+      currentUser.current=profile.userId;
+      setUserId(profile.userId);setSessionUser(profile.handle);
+      setToken("");setOfflineUnlocked(true);setCacheAllowed(true);
+      setOffline(true);setFeeds(snapshot.feeds);
+      setEntries(overlayChanges(snapshot.entries,pending));
+      setStats(snapshot.stats);setQueueItems(pending);setCursor(null);
+      setUnlockPhrase("");
+      setNotice("Offline knihovna odemčena. Přístup k serveru vyžaduje samostatné přihlášení.");
+    }catch(error){
+      setError(error instanceof Error?error.message:"Offline trezor nelze odemknout.");
+    }finally{setLoading(false);}
+  }
+
+  async function saveVaultDialog(event:FormEvent){
+    event.preventDefault();
+    const user=currentUser.current;
+    if(!user||!token)return;
+    setError("");setVaultBusy(true);
+    try{
+      if(vaultDialog==="create"){
+        if(vaultPhrase!==vaultRepeat)throw Error("Obě offline hesla se musí shodovat.");
+        await createVault(user,sessionUser,vaultPhrase);
+      }else{
+        await unlockVault(user,vaultPhrase);
+      }
+      setVaultDialog(null);setVaultPhrase("");setVaultRepeat("");
+      setCacheAllowed(true);
+      setVaultProfiles(await listVaultProfiles());
+      await load(token,feedId);
+      setNotice("Zašifrovaná offline knihovna je připravená. Offline heslo si bezpečně uschovej.");
+    }catch(error){
+      setError(error instanceof Error?error.message:"Offline trezor nelze nastavit.");
+    }finally{setVaultBusy(false);}
+  }
   function switchView(next:FolderView){setView(next);setFeedId("");setActive(null);setMobileNav(false);}
   async function changeState(entry:Entry,key:OfflineField){
     const user=currentUser.current;
@@ -401,7 +485,7 @@ export function App(){
     try{
       await queueChange(user,entry,key,desired);
       await refreshQueue(user);
-      if(navigator.onLine)void flushOffline(token,user);
+      if(token&&navigator.onLine)void flushOffline(token,user);
       else{setOffline(true);setNotice("Změna uložena offline. Odešle se po obnovení spojení.");}
     }catch(error){
       setError(error instanceof Error?error.message:"Offline změnu nelze uložit");
@@ -414,28 +498,28 @@ export function App(){
     try{
       await resolveConflict(change.id,choice);
       await refreshQueue(user);
-      if(choice==="local")void flushOffline(token,user);
+      if(choice==="local"&&token)void flushOffline(token,user);
       else void load(token,feedId);
     }catch(error){setError(error instanceof Error?error.message:"Řešení konfliktu selhalo");}
   }
   async function toggleArticleCache(){
     const user=currentUser.current;
-    if(!user)return;
-    const turnOn=!cacheAllowed;
-    if(turnOn && !window.confirm(
-      "Ukládat názvy zdrojů, URL a texty článků do tohoto prohlížeče? "+
-      "Údaje nejsou šifrované. Na sdíleném zařízení funkci nezapínej."))return;
+    if(!user||!token)return;
+    setError("");
     try{
-      await setCachePreference(user,turnOn);
-      setCacheAllowed(turnOn);
-      if(turnOn){
-        await load(token,feedId);
-        setNotice("Offline kopie zapnuta. Texty dostupné v otevřené přihlášené kartě.");
+      if(cacheAllowed){
+        if(!window.confirm("Smazat zašifrovaný offline trezor? "+
+          "Neodeslané změny zůstanou ve frontě. Bez zálohy už obsah neobnovíš."))return;
+        await deleteVault(user);
+        setCacheAllowed(false);
+        setVaultProfiles(await listVaultProfiles());
+        setNotice("Offline trezor byl odstraněn. Neodeslané změny zůstaly zachované.");
       }else{
-        setNotice("Offline kopie článků odstraněna. Neodeslané změny zůstávají ve frontě.");
+        setVaultPhrase("");setVaultRepeat("");
+        setVaultDialog((await vaultExists(user))?"unlock":"create");
       }
     }catch(error){
-      setError(error instanceof Error?error.message:"Nastavení offline kopie selhalo");
+      setError(error instanceof Error?error.message:"Nastavení offline trezoru selhalo");
     }
   }
   async function wipeLocalCache(){
@@ -443,6 +527,8 @@ export function App(){
     if(!user||!window.confirm("Opravdu smazat offline články a všechny čekající změny tohoto účtu?"))return;
     try{
       await clearOfflineUser(user);setQueueItems([]);setCacheAllowed(false);
+      setVaultProfiles(await listVaultProfiles());
+      if(offlineUnlocked&&!token)lockLocalLibrary();
       setNotice("Lokální offline data byla smazána.");
     }catch(error){setError(error instanceof Error?error.message:"Smazání offline dat selhalo");}
   }
@@ -513,7 +599,7 @@ export function App(){
     window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);
   },[]);
 
-  if(!token){
+  if(!token&&!offlineUnlocked){
     return <main className="login-shell" data-theme={theme}>
       <div className="login-card">
         <div className="logo-symbol">K<span>·</span></div>
@@ -530,6 +616,25 @@ export function App(){
             placeholder="Tvoje heslo" autoComplete="current-password"/>
           <button className="primary" type="submit" disabled={loading}>{loading?"Ověřuji…":"Přihlásit se"}</button>
         </form>
+        {vaultProfiles.length?<section className="vault-login">
+          <h2>Odemknout offline knihovnu</h2>
+          <p>Bez internetu lze otevřít pouze zašifrované články uložené v tomto prohlížeči.</p>
+          <form onSubmit={event=>void openOfflineLibrary(event)}>
+            <label htmlFor="offline-profile">Místní profil</label>
+            <select id="offline-profile" value={selectedVault}
+              onChange={event=>setSelectedVault(event.target.value)}>
+              {vaultProfiles.map(profile=><option key={profile.userId} value={profile.userId}>
+                {profile.handle}</option>)}
+            </select>
+            <label htmlFor="offline-unlock">Samostatné offline heslo</label>
+            <input id="offline-unlock" type="password" required minLength={12}
+              maxLength={256} autoComplete="off"
+              value={unlockPhrase} onChange={event=>setUnlockPhrase(event.target.value)}/>
+            <button className="subtle" disabled={loading} type="submit">
+              Odemknout bez serveru</button>
+          </form>
+          <small>Odemknutí neobnoví přihlášení k serveru.</small>
+        </section>:null}
         {error?<div className="alert error" role="alert">{error}</div>:null}
         <small>Účet se zakládá jednorázově pomocí místního administračního příkazu. Aplikace zatím není určena k veřejnému provozu.</small>
       </div>
@@ -552,11 +657,11 @@ export function App(){
       </section>
       <section className="side-section feeds-section">
         <div className="section-row"><p className="section-label">ZDROJE · {stats.subscriptions}</p>
-          <button className="plus" title="Přidat RSS" onClick={()=>setAdding(true)}>+</button></div>
+          <button className="plus" title="Přidat RSS" disabled={!token} onClick={()=>setAdding(true)}>+</button></div>
         <div className="opml-actions">
-          <button type="button" disabled={opmlBusy} onClick={()=>opmlInput.current?.click()}>
+          <button type="button" disabled={opmlBusy||!token} onClick={()=>opmlInput.current?.click()}>
             ↑ Import OPML</button>
-          <button type="button" disabled={opmlBusy} onClick={()=>void exportOPMLFile()}>
+          <button type="button" disabled={opmlBusy||!token} onClick={()=>void exportOPMLFile()}>
             ↓ Export OPML</button>
         </div>
         <input ref={opmlInput} className="visually-hidden" type="file" accept=".opml,.xml,application/xml,text/xml"
@@ -569,13 +674,14 @@ export function App(){
               <span className="feed-text">{f.display_title||f.title}</span>
               {f.last_error?<span className="feed-error" title={f.last_error}>!</span>:null}
             </button>
-            <button className="feed-delete" title="Odhlásit zdroj" onClick={()=>void unsubscribe(f)}>×</button>
+            <button className="feed-delete" title="Odhlásit zdroj" disabled={!token} onClick={()=>void unsubscribe(f)}>×</button>
           </div>)}
         </div>)}
         {!feeds.length?<p className="muted-small">Zatím žádné zdroje. Přidej RSS nebo importuj OPML.</p>:null}
       </section>
       <div className="sidebar-bottom"><div className="online-dot"></div>{sessionUser||"Lokální instance"}
-        <button title="Odhlásit" onClick={()=>void logout()}>Odhlásit</button>
+        <button title={offlineUnlocked&&!token?"Zamknout offline knihovnu":"Odhlásit"}
+          onClick={()=>void logout()}>{offlineUnlocked&&!token?"Zamknout":"Odhlásit"}</button>
       </div>
     </aside>
     {mobileNav?<button className="nav-mask" aria-label="Zavřít nabídku" onClick={()=>setMobileNav(false)}/>:null}
@@ -589,28 +695,31 @@ export function App(){
         <div className="topbar-actions">
           <button className="icon-action" title="Přepnout téma" onClick={()=>setTheme(t=>t==="dark"?"light":"dark")}>◐</button>
           <button className="icon-action" title="Znovu načíst" onClick={()=>void load(token,feedId)}>↻</button>
-          <button className="primary compact" onClick={()=>setAdding(true)}>+ <span>Přidat kanál</span></button>
+          <button className="primary compact" disabled={!token} onClick={()=>setAdding(true)}>+ <span>Přidat kanál</span></button>
         </div>
       </header>
       <div className="page">
+        {offlineUnlocked&&!token?<div className="offline-auth-notice" role="status">
+          Offline knihovna je odemčená jen místním heslem. Serverové operace jsou vypnuté.
+        </div>:null}
         <div className="page-header">
           <div><div className="eyebrow">MOJE KNIHOVNA / {feedId?"KANÁL":"PŘEHLED"}</div>
             <h1>{viewName}</h1>
             <p>{feedId?feeds.find(f=>f.id===feedId)?.url:"Tvůj obsah, na tvém serveru."}</p></div>
-          <button className="subtle" onClick={()=>void refresh()} disabled={loading}>↻ Obnovit zdroje</button>
+          <button className="subtle" onClick={()=>void refresh()} disabled={loading||!token}>↻ Obnovit zdroje</button>
         </div>
         {error?<div role="alert" className="alert error">{error}</div>:null}
         {notice?<div role="status" className="alert success">{notice}</div>:null}
         <div className={"offline-status "+(offline?"is-offline":"")}>
-          <span>{offline?"Offline: naposledy uložené články":"Online synchronizace"} ·
+          <span>{offlineUnlocked&&!token?"Offline trezor – bez serverové relace":offline?"Offline: naposledy uložené články":"Online synchronizace"} ·
             {cacheAllowed?" kopie článků zapnuta":" kopie článků vypnuta"}</span>
-          <button type="button" aria-pressed={cacheAllowed}
+          <button type="button" disabled={!token} aria-pressed={cacheAllowed}
             title="Lokální texty a URL nejsou šifrované"
             onClick={()=>void toggleArticleCache()}>
             {cacheAllowed?"Vypnout offline články":"Zapnout offline články"}</button>
           <strong>Čeká na odeslání: {pendingCount}</strong>
           {conflictCount?<strong className="offline-conflict">{conflictCount} konfliktů</strong>:null}
-          <button type="button" onClick={()=>void flushOffline(token,userId)}>Synchronizovat</button>
+          <button type="button" disabled={!token} onClick={()=>void flushOffline(token,userId)}>Synchronizovat</button>
           <button type="button" onClick={()=>void wipeLocalCache()}>Smazat offline data</button>
         </div>
         {conflictCount>0?<div className="offline-conflicts" role="region" aria-label="Konflikty synchronizace">
@@ -641,7 +750,7 @@ export function App(){
         <div className="result-heading">
           <span>{loading||searchBusy?"Načítám…":currentEntries.length+" zobrazených položek"}{
             (search.trim().length>=2?remoteCursor:cursor)?" · další jsou dostupné":""}</span>
-          <span>{search.trim().length>=2?"Vyhledávání v databázi":"Vývojová verze · serverová synchronizace"}</span>
+          <span>{offlineUnlocked&&!token?"Místní zašifrovaná kopie":search.trim().length>=2?"Vyhledávání v databázi":"Vývojová verze · serverová synchronizace"}</span>
         </div>
         <section className={"grid "+layout}>
           {currentEntries.map(e=><Tile key={e.id} entry={e} layout={layout}
@@ -676,6 +785,31 @@ export function App(){
           <p className="reader-footnote">Zobrazený text pochází z RSS. Plný obsah článků a pokročilé poznámky budou doplněny později.</p>
         </div>
       </aside>
+    </div>:null}
+    {vaultDialog?<div className="dialog-mask" onClick={()=>{setVaultDialog(null);setVaultPhrase("");setVaultRepeat("");}}>
+      <section className="dialog-card vault-dialog" role="dialog" aria-modal="true"
+        aria-label="Šifrovaná offline knihovna" onClick={event=>event.stopPropagation()}>
+        <div className="dialog-header"><h2>{vaultDialog==="create"?
+          "Založit šifrovanou offline knihovnu":"Odemknout existující trezor"}</h2>
+          <button onClick={()=>setVaultDialog(null)}>×</button></div>
+        <form onSubmit={event=>void saveVaultDialog(event)}>
+          <p>Offline heslo je samostatné. Není odesíláno serveru a bez něj nelze
+            uložené články po restartu dešifrovat.</p>
+          <label>Offline heslo (minimálně 12 znaků)
+            <input type="password" required minLength={12} maxLength={256}
+              autoComplete="new-password" value={vaultPhrase}
+              onChange={event=>setVaultPhrase(event.target.value)}/></label>
+          {vaultDialog==="create"?<label>Potvrdit offline heslo
+            <input type="password" required minLength={12} maxLength={256}
+              autoComplete="new-password" value={vaultRepeat}
+              onChange={event=>setVaultRepeat(event.target.value)}/></label>:null}
+          <p>Obsah bude chráněn AES-GCM; odvození klíče používá PBKDF2.
+            Offline fronta stavů zatím zůstává mimo šifrovaný trezor.</p>
+          <button className="primary" type="submit" disabled={vaultBusy}>
+            {vaultBusy?"Zpracovávám…":vaultDialog==="create"?"Vytvořit trezor":"Odemknout trezor"}
+          </button>
+        </form>
+      </section>
     </div>:null}
     {adding?<div className="dialog-mask" onClick={()=>setAdding(false)}>
       <section className="dialog-card" role="dialog" aria-modal="true" aria-label="Přidat RSS kanál" onClick={e=>e.stopPropagation()}>
