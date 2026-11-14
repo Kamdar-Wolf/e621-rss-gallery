@@ -1,9 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import "fake-indexeddb/auto";
+import {webcrypto} from "node:crypto";
+if(!globalThis.crypto)Object.defineProperty(globalThis,"crypto",{value:webcrypto});
 import {cacheSnapshot,getSnapshot,queueChange,getChanges,overlayChanges,
-  flushChanges,resolveConflict,clearOfflineUser,getCachePreference,setCachePreference,type RemoteState} from "../apps/web/src/offline.js";
+  flushChanges,resolveConflict,clearOfflineUser,getCachePreference,type RemoteState} from "../apps/web/src/offline.js";
 import type {Entry,Feed,Stats} from "../apps/web/src/api.js";
+import {createVault,unlockVault,lockVault,listVaultProfiles,isVaultUnlocked,
+  vaultExists} from "../apps/web/src/offline-vault.js";
 
 const userA="00000000-0000-4000-8000-000000000001";
 const userB="00000000-0000-4000-8000-000000000002";
@@ -27,16 +31,42 @@ function remote(revision:number,starred:boolean,saved:boolean):RemoteState{
     saved_at:saved?"2026-11-14T00:10:00Z":null,
     revision,updated_at:"2026-11-14T00:10:00Z"};
 }
-test("offline snapshots require explicit permission and remain separate across accounts",async()=>{
+test("encrypted offline snapshots require explicit opt-in and separate passphrases",async()=>{
   assert.equal(await getCachePreference(userA),false);
   await cacheSnapshot(userA,feeds,[entry],stats);
   assert.equal(await getSnapshot(userA),null);
-  await setCachePreference(userA,true);
-  await setCachePreference(userB,true);
+  await createVault(userA,"Local user A","a-long-test-passphrase-for-user-a");
+  await createVault(userB,"Local user B","another-long-test-passphrase-b");
+  assert.equal(await getCachePreference(userA),true);
   await cacheSnapshot(userA,feeds,[entry],stats);
   await cacheSnapshot(userB,feeds,[other],stats);
   assert.equal((await getSnapshot(userA))?.entries[0].id,entryId);
   assert.equal((await getSnapshot(userB))?.entries[0].id,other.id);
+  assert.equal((await listVaultProfiles()).length,2);
+  assert.equal(await vaultExists(userA),true);
+  lockVault(userA);
+  assert.equal(isVaultUnlocked(userA),false);
+  assert.equal(await getSnapshot(userA),null);
+  await assert.rejects(unlockVault(userA,"this-is-wrong-passphrase"));
+  const unlocked=await unlockVault(userA,"a-long-test-passphrase-for-user-a");
+  assert.equal(unlocked.snapshot.entries[0].id,entryId);
+  assert.equal(unlocked.profile.userId,userA);
+  // No plaintext article metadata in IndexedDB: only ciphertext and crypto params.
+  const database=await new Promise<IDBDatabase>((resolve,reject)=>{
+    const request=indexedDB.open("kamdar-reader-vault-v1");
+    request.onsuccess=()=>resolve(request.result);
+    request.onerror=()=>reject(request.error);
+  });
+  const raw=await new Promise<{ciphertext:ArrayBuffer}>((resolve,reject)=>{
+    const request=database.transaction("vaults","readonly")
+      .objectStore("vaults").get(userA);
+    request.onsuccess=()=>resolve(request.result);
+    request.onerror=()=>reject(request.error);
+  });
+  const encrypted=new Uint8Array(raw.ciphertext);
+  assert.ok(encrypted.length>200);
+  assert.equal(Buffer.from(encrypted).includes(Buffer.from("Offline article")),false);
+  database.close();
 });
 test("pending changes survive another read and are user scoped",async()=>{
   await queueChange(userA,entry,"starred",true);
@@ -117,13 +147,13 @@ test("reversing a flag during an in-flight request keeps the final user intent",
   });
   assert.equal(second.remaining,0);
 });
-test("disabling article cache removes content but preserves unsent status",async()=>{
+test("locking encrypted vault hides articles without destroying unsent status",async()=>{
   await queueChange(userA,entry,"saved",true);
-  await setCachePreference(userA,false);
+  lockVault(userA);
   assert.equal(await getCachePreference(userA),false);
   assert.equal(await getSnapshot(userA),null);
   assert.equal((await getChanges(userA)).length,1);
-  // Explicit test cleanup for next account deletion case.
+  await unlockVault(userA,"a-long-test-passphrase-for-user-a");
 });
 test("per-user data are deleted without impacting another account",async()=>{
   await clearOfflineUser(userA);
