@@ -7,7 +7,7 @@ export interface VaultProfile {
   userId:string;handle:string;createdAt:number;updatedAt:number;
 }
 interface VaultRecord extends VaultProfile {
-  salt:Uint8Array;iv:Uint8Array;ciphertext:ArrayBuffer;
+  salt:Uint8Array<ArrayBuffer>;iv:Uint8Array<ArrayBuffer>;ciphertext:ArrayBuffer;
 }
 
 const DB_NAME="kamdar-reader-vault-v1";
@@ -68,7 +68,7 @@ async function getRecord(userId:string):Promise<VaultRecord|null>{
     request.onerror=()=>reject(request.error||Error("Trezor nelze přečíst"));
   });
 }
-async function derive(passphrase:string,salt:Uint8Array):Promise<CryptoKey>{
+async function derive(passphrase:string,salt:Uint8Array<ArrayBuffer>):Promise<CryptoKey>{
   validatePassphrase(passphrase);
   const root=await crypto.subtle.importKey("raw",encoder.encode(passphrase),
     "PBKDF2",false,["deriveKey"]);
@@ -78,7 +78,7 @@ async function derive(passphrase:string,salt:Uint8Array):Promise<CryptoKey>{
 }
 function aad(userId:string){return encoder.encode("kamdar-vault-v1:"+userId);}
 async function encrypt(userId:string,content:VaultSnapshot,key:CryptoKey):Promise<{
-  iv:Uint8Array;ciphertext:ArrayBuffer;
+  iv:Uint8Array<ArrayBuffer>;ciphertext:ArrayBuffer;
 }>{
   const iv=crypto.getRandomValues(new Uint8Array(12));
   const ciphertext=await crypto.subtle.encrypt(

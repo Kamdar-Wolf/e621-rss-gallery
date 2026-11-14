@@ -93,17 +93,17 @@ function timestamp(entry:Entry):number{
 }
 /** Snapshot and preference APIs now require an unlocked encrypted vault. */
 export async function getSnapshot(userId:string):Promise<OfflineSnapshot|null>{
-  validateUser(userId);
+  validUser(userId);
   return getVaultSnapshot(userId);
 }
 export async function getCachePreference(userId:string):Promise<boolean>{
-  validateUser(userId);
+  validUser(userId);
   return isVaultUnlocked(userId);
 }
 export async function cacheSnapshot(
   userId:string,feeds:Feed[],entries:Entry[],stats:Stats
 ):Promise<void>{
-  validateUser(userId);
+  validUser(userId);
   await saveVaultSnapshot(userId,feeds,entries,stats);
 }
 export async function getChanges(userId:string):Promise<QueuedChange[]>{
