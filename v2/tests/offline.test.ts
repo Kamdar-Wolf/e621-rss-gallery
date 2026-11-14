@@ -153,8 +153,9 @@ test("locking encrypted vault hides articles without destroying unsent status",a
   lockVault(userA);
   assert.equal(await getCachePreference(userA),false);
   assert.equal(await getSnapshot(userA),null);
-  assert.equal((await getChanges(userA)).length,1);
+  assert.equal((await getChanges(userA)).length,0);
   await unlockVault(userA,"a-long-test-passphrase-for-user-a");
+  assert.equal((await getChanges(userA)).length,1);
 });
 test("offline queue is encrypted at rest and survives an unlock cycle",async()=>{
   const before=await getChanges(userA);
