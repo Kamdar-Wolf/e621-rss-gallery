@@ -816,7 +816,7 @@ export function App(){
           <span>{offlineUnlocked&&!token?"Místní zašifrovaná kopie":search.trim().length>=2?"Vyhledávání v databázi":"Vývojová verze · serverová synchronizace"}</span>
         </div>
         <section className={"grid "+layout}>
-          {currentEntries.map(e=><Tile key={e.id} entry={e} layout={layout}
+          {currentEntries.map(e=><Tile key={e.id} entry={offlineUnlocked&&!token?{...e,thumbnail:null}:e} layout={layout}
             source={sourceNames[e.feed_id]||"RSS zdroj"} onSelect={entry=>{setActive(entry);void changeStateIfUnread(entry);}}
             onStar={entry=>void changeState(entry,"starred")} onRead={entry=>void changeState(entry,"read")}/>)}
         </section>
@@ -840,7 +840,7 @@ export function App(){
         </div>
         <div className="reader-scroll"><div className="eyebrow">{active.published_at?dateFmt.format(new Date(active.published_at)):"Bez data"} · {active.media_type}</div>
           <h2>{active.title}</h2>
-          <TileImage src={active.thumbnail} alt={active.title}/>
+          <TileImage src={offlineUnlocked&&!token?null:active.thumbnail} alt={active.title}/>
           {active.author?<p className="author">Autor: {active.author}</p>:null}
           <p className="reader-summary">{active.summary||"Zdroj neposkytuje textový popis příspěvku."}</p>
           {active.source_url?<a className="primary reader-link" href={active.source_url} target="_blank" rel="noopener noreferrer">

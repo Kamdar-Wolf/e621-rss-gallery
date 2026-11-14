@@ -1,52 +1,48 @@
-# Offline režim – první implementace (vývojová verze)
+# Offline režim – šifrovaná knihovna a fronta (vývojová verze)
 
-## Co funguje
-- Po **výslovném souhlasu** aplikace uchovává v IndexedDB **posledních až 500 článků**, přehled zdrojů a počty položek samostatně pro každé ID uživatele.
-- Po výpadku připojení lze v **již přihlášené a otevřené kartě** prohlížet uložené titulky, textové souhrny, zdroje a lokálně filtrovat/vyhledávat v uložených článcích.
-- Kliknutí na přečteno, oblíbené nebo uložit vytvoří odolnou lokální frontu změn. Každá položka/akce má jedinečný klíč; opakované přepnutí zruší zbytečný požadavek.
-- Po obnovení spojení klient změny odesílá. Každá operace nese očekávanou revizi a aktualizuje pouze **jediné konkrétní pole**, takže nedochází k nechtěnému přepsání jiných příznaků.
-- Serverový konflikt HTTP 409 se vyhodnotí: pokud se mezitím změnilo jiné pole, provede se jeden bezpečný rebase; pokud už server má požadovaný stav, položka se považuje za vyřízenou. Při opakovaném konfliktu zůstane položka ve frontě a uživatel se rozhodne „Ponechat server“ nebo „Použít místní volbu“.
-- Při odhlášení se aplikace **zeptá před smazáním** offline článků a nedokončených změn; potom smaže lokální data daného účtu.
+## Rozsah
 
-## Co se ukládá
-Při zapnuté offline kopii textová metadata článků, názvy zdrojů a URL obrázků; fronta změn se ukládá nezávisle na volbě cache. **Neukládají se hesla, session cookie ani CSRF token.** Offline data nejsou v této etapě šifrována a mají dostupnost v rámci profilu prohlížeče. Na sdíleném počítači používej jen oddělené uživatelské profily.
+- Po online přihlášení je možné vytvořit místní trezor se **samostatným offline heslem** (12–256 znaků). Ukládání soukromých článků do trezoru je dobrovolné.
+- V trezoru jsou šifrované RSS titulky, textové souhrny, odkazy na zdroje a **fronta změn přečteno/oblíbené/uložené**.
+- Po novém otevření PWA bez internetu lze trezor odemknout offline heslem. Nepovoluje to volání serverových API, přidání kanálu ani stahování nových článků.
+- Po online přihlášení a odemknutí trezoru se čekající změny synchronizují. Při HTTP 409 aplikace nabízí řešení konfliktu, nevytváří tiché přepsání.
+- Místní fronta má limit 1500 operací na účet; trezor uchovává maximálně 500 nejnovějších RSS položek. Žádné originální obrázky/video/audio se do offline úložiště nestahují.
 
-## Service worker
-Při **produkčním sestavení** (`npm run build:web`) se vygeneruje `dist-web/sw.js` s přesným seznamem statických hashed JS/CSS souborů. Cache API ukládá pouze samotné rozhraní aplikace. **API a média z cizích domén se do Cache API nikdy neukládají.** Bez instalovaného service workeru může offline obnovení stránky skončit chybou prohlížeče.
+## Kryptografie
 
-## Omezení
-- **Offline přístup po novém spuštění prohlížeče ještě nefunguje** – relace se musí ověřit online. Tento milník je použitelný při výpadku v *již otevřené přihlášené kartě*.
-- **Obrázky, videa a audio nejsou zaručeně dostupné offline**. Cache zatím nezrcadlí cizí soubory ani API obsah.
-- Změny se automaticky odesílají pouze z otevřené stránky. Není spuštěn Background Sync na pozadí a nelze garantovat odeslání po zavření karty.
-- Fronta má ochranný limit 1500 operací na účet, obsah lokální cache limit 500 příspěvků. Úložiště může prohlížeč smazat, například kvůli úspoře místa.
-- Konflikty vidíš v panelu pod horní lištou. Volba „Použít místní“ nemusí okamžitě uspět při další souběžné změně; bude třeba opakovat synchronizaci.
-- Offline cache se nepovažuje za bezpečnou osobní zálohu. Pro archiv celých článků a médií bude třeba další backend a nastavit limity retention.
+- WebCrypto PBKDF2-HMAC-SHA256 (350 000 iterací), náhodná 128bitová sůl, výsledný neexportovatelný klíč AES-GCM-256.
+- Knihovna a fronta používají **oddělené AES-GCM zprávy** a oddělené associated-data identifikátory, oba navázané na UUID uživatele; při každém přepisu se generuje nové 96bitové IV.
+- Do IndexedDB se ukládá ciphertext, IV, sůl, označení místního profilu, jeho UUID a časová metadata. Offline heslo a CryptoKey v databázi nejsou.
+- Klíč existuje jen v paměti otevřené stránky, zamčením se zahodí. Nesprávné heslo nebo poškozený ciphertext dešifrování znemožní.
+- Změny fronty se v jedné kartě serializují. Pokud prohlížeč podporuje Web Locks, serializují se i mezi kartami na stejné doméně.
+- Jde o aplikační šifrování dat uložených na disku; nezabrání přístupu škodlivého JavaScriptu, prohlížečového rozšíření ani malwaru k již odemčené knihovně.
 
-## Testy
-`tests/offline.test.ts` používá náhradní IndexedDB v Node.js a ověřuje izolaci účtů, přetrvání fronty, deduplikaci, odesílání po výpadku, slučování jiných revizí a explicitní řešení konfliktů.
+## Převod starých nešifrovaných dat
 
-## Zabezpečení dodatečně upravené v této etapě
-- Lokální kopie osobních článků je nyní **výchozím stavem vypnutá** a lze ji zapnout teprve potvrzením v aplikaci. Vypnutí smaže uložené texty, nikoli neodeslané změny.
-- Přechod z vývojové databáze IndexedDB v1 na v2 automaticky odstraňuje staré kopie, které se ukládaly bez souhlasu.
-- Fronta má ochranný limit **před** zápisem nové operace, nikoli až po něm.
-- Synchronizace používá generační číslo požadavku: změna během síťového odesílání nesmí být omylem odstraněna potvrzením starší verze.
+1. Upgrade IndexedDB odstraní staré nešifrované kopie RSS článků z původních vývojových verzí. Tyto kopie se **nepřevádějí**, protože neměly šifrovací heslo.
+2. Starší nešifrovaná fronta změn se **neodstraňuje předčasně**. Zůstává v původním úložišti, dokud uživatel nevytvoří nebo neodemkne trezor.
+3. Migrace přečte starší čekající změny, sloučí je s případnou již šifrovanou frontou (přednost mají novější zašifrované záznamy) a uloží výsledek pomocí AES-GCM.
+4. Až po úspěšném šifrovaném zápisu se smažou nešifrované původní záznamy. Při selhání migrace staré změny zůstanou zachované.
+5. Opakované spuštění migrace nevytvoří duplicity. Rozhraní upozorní, pokud stará fronta ještě nebyla převedena.
 
-## Milník: Šifrovaná místní knihovna (AES-GCM)
+**Důležité:** Do dokončení migrace mohou být starší změny nadále nešifrované. Na sdíleném počítači je nutné starší instalaci aktualizovat a trezor odemknout.
 
-**Nový postup:** Ve čtečce se přihlas online, klikni na „Zapnout offline články“, vytvoř samostatné heslo (12–256 znaků) a potvrď jej. Uložené články se poté šifrují algoritmem AES-GCM-256. Šifrovací klíč se odvozuje pomocí PBKDF2-HMAC-SHA256 (350 000 iterací) z hesla a náhodné 128bitové soli. Každé uložení používá nové náhodné IV a vazbu na identifikátor účtu pomocí AEAD associated data.
+## Chování při výpadku a odhlášení
 
-Po restartu prohlížeče se na přihlašovací obrazovce zobrazí „Odemknout offline knihovnu“. Vyber místní profil a zadej **offline heslo**. Pokud je statický klient PWA uložen v prohlížeči, lze načíst uložené titulky, RSS souhrny a lokální značky i bez připojení. Odemknutí neobnoví serverovou session cookie a nepovolí operace vyžadující přístup k API.
+- Odemčená offline knihovna slouží pro místní prohlížení a změny bez internetu. Odeslání čeká na obnovení spojení **a online přihlášení**.
+- Je-li trezor zamčený, nejsou jeho čekající operace viditelné ani odesílané; online změny je však možné provádět přímo na serveru.
+- Běžné online odhlášení odvolá serverovou relaci a zahodí klíč z paměti, ale **ponechá šifrovanou knihovnu i frontu** pro pozdější odemknutí.
+- **Smazat offline data** odstraní trezor i frontu tohoto účtu. Při pokusu vypnout offline knihovnu s neodeslanými změnami aplikace odmítne jejich nechtěné smazání.
+- Service Worker ukládá pouze aplikaci HTML/JS/CSS pro offline spuštění. API a vzdálené obrázky se necachují. V čistě offline režimu klient nevytváří požadavky na vzdálené obrázky.
 
-### Bezpečnostní vlastnosti
-- Klíč CryptoKey není exportovatelný, zůstává pouze v paměti aktuálně otevřené stránky. Heslo ani klíč se nezapisují do IndexedDB ani do backendu.
-- V IndexedDB jsou nešifrovaně dostupné jen identifikátor místního účtu a jeho zobrazované jméno, sůl, IV a metadata časů. Zbytek článkové knihovny je šifrovaný.
-- Staré nešifrované snapshoty z IndexedDB v1/v2 se při upgradu na v3 mažou; **automaticky se nepřevádějí**, protože dříve žádné šifrovací heslo neexistovalo.
-- **Fronta změn přečteno/hvězdička/uložit je nadále nešifrovaná** (ID článků, stav, revize). V další etapě je nutné zašifrovat ji také. Nepovažuj aplikaci zatím za úložiště vhodné pro vysoce citlivé informace.
-- Při vypnutí offline článků se trezor odstraní; neodeslané změny zůstávají ve frontě. Při úplném odhlášení nebo ručním vymazání dat aplikace maže trezor i frontu.
-- Pokud heslo zapomeneš a nemáš původní zdroje dostupné online, obsah trezoru nelze obnovit.
-- Heslo volte unikátní a dlouhé. PBKDF2 omezuje, ale nezabrání útoku hrubou silou na slabé heslo.
-- Offline režim nezaručuje dostupnost obrázků a videí – obsah je zatím textový. Statický PWA shell musí být před výpadkem alespoň jednou načten v online sestavení.
-- Bezpečnostní audit třetí stranou a testy Windows/Android na skutečných zařízeních zatím neproběhly.
+## Známá omezení a další testy
 
-### Omezení a navazující práce
-Šifrování chrání obsah uložený v místní databázi, ale neřeší kompromitovaný prohlížeč, škodlivá rozšíření, XSS ani nešifrovanou frontu metadat. Přidání originálních médií do offline trezoru bude vyžadovat samostatné limity, politiku obsahu a správu velikostí.
+- Výstup z RSS není automaticky celý článek. Offline mediální engine, vícestránkové galerie a audio/video budou samostatná etapa.
+- Browser může data IndexedDB evikovat; offline trezor proto nenahrazuje plnohodnotnou zálohu. Zapomenuté offline heslo nelze obnovit.
+- Lokální jméno uživatele a některá metadata trezoru jsou nezabezpečená. Staré nešifrované změny před migrací mohou zůstat ve starším úložišti.
+- Zatím není otestován provoz na skutečném Windows a Androidu. CI používá testovací IndexedDB a PostgreSQL. Výkon 1500 šifrovaných operací ani bezpečnost nebyly nezávisle auditovány.
+- Po přerušení síťového požadavku je výsledek zápisu neznámý; klient řeší serverové revize a při konfliktu vyžaduje další ověření. Nejde o garantované exactly-once doručení.
+
+## Automatické kontroly
+
+`v2/tests/offline.test.ts` zahrnuje zamykání a odemykání trezoru, ochranu ciphertextu proti manipulaci, izolaci uživatelů, převod původní nešifrované fronty, ověření jejího odstranění po migraci, zachování rychlých změn během odesílání a konfliktů serverových revizí.

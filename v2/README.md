@@ -10,7 +10,7 @@
 - Izolace odběrů a uživatelských stavů mezi účty.
 - První synchronizace stavu přečtení, oblíbených a uložených položek: API vrací změny a online klient je kontroluje přibližně každých 20 sekund. Při konfliktu revizí server neprovede tiché přepsání.
 
-**Dosud chybí:** šifrování offline fronty změn, synchronizace štítků/poznámek/nastavení, pokročilé zobrazení více obrázků, vlastní mediální proxy, skutečné produkční účty s MFA, zabezpečený provoz na veřejné doméně a testy původních zdrojů na cílovém serveru.
+**Dosud chybí:** automatizovaná migrace staré fronty bez znalosti offline hesla, synchronizace štítků/poznámek/nastavení, pokročilé zobrazení více obrázků, vlastní mediální proxy, skutečné produkční účty s MFA, zabezpečený provoz na veřejné doméně a testy původních zdrojů na cílovém serveru.
 
 ## Spuštění na Windows – lokální vývoj
 
@@ -75,14 +75,18 @@ Před spuštěním administračního příkazu nastav `READER_BOOTSTRAP_USER` na
 ## Automatické testy
 Workflow `.github/workflows/v2-check.yml` ověřuje TypeScript, testy validace, autentizaci, databázové migrace a integrační testy, sestavení React webu i Docker obrazu. Zelené CI potvrzuje kontrolované scénáře, **nikoli** dlouhodobou stabilitu veřejného provozu.
 
-## Offline režim (první etapa)
+## Šifrované offline čtení a fronta změn
 
-Po výslovném zapnutí offline kopie umí otevřená přihlášená karta při výpadku spojení zobrazit naposledy uložené textové články. Bez ohledu na tuto volbu zařazuje změny přečtení, oblíbených a uložených položek do lokální fronty, aby se neztratily při přerušení připojení. Po obnovení spojení se změny pošlou serveru, který kontroluje revize a případné konflikty. Aplikace ukazuje počet čekajících změn a umožní je vyřešit. Při zapnutí offline kopie uživatel vytváří samostatné offline heslo. Obsah a adresy zdrojů se šifrují AES-GCM. Fronta změn stále obsahuje nezašifrovaná metadata. Synchronizace používá generační značky změn a v podporovaných prohlížečích zámek pro více otevřených karet.
+Po online přihlášení může uživatel vytvořit **offline trezor** se samostatným heslem (alespoň 12 znaků). Trezor AES-GCM-256 šifruje uložené RSS titulky, texty, odkazy i všechny nově vytvářené offline změny přečtení, oblíbených a uložených příspěvků. Klíč je odvozen PBKDF2-HMAC-SHA256 a není uložený na disk.
 
-**Nejde ještě o plný offline archiv:** po restartu prohlížeče lze offline trezor odemknout samostatným heslem, ale tím se neobnoví serverová relace. Obrázky a video se neukládají. Detaily, zabezpečení a testy: [OFFLINE.md](docs/OFFLINE.md).
+Po restartu lze trezor odemknout bez internetu. Odemknutí umožní číst lokální texty a zařazovat další změny do šifrované fronty, **nepřihlašuje ale k serveru**. Po online přihlášení a odemknutí trezoru se fronta opět synchronizuje. Konflikty revizí jsou vyhodnocovány samostatně.
 
-## Šifrovaná offline knihovna
+Bez založeného/odemknutého trezoru lze při online přihlášení měnit stavy článků přímo na serveru. Offline změny se **neukládají nešifrovaně**; pro offline úpravy je nutné trezor odemknout.
 
-Po online přihlášení zvol **Zapnout offline články**, vytvoř samostatné offline heslo (min. 12 znaků) a potvrď jeho uložení. Při novém otevření aplikace bez serveru použij na přihlašovací obrazovce **Odemknout offline knihovnu** a vyber odpovídající místní profil. Tím se odemknou jen články uložené v tomto prohlížeči, nikoli serverový účet.
+### Migrace starší offline fronty
 
-Články jsou šifrovány AES-GCM-256 s klíčem odvozeným z hesla PBKDF2-HMAC-SHA256; úložiště heslo nezachovává. **Nezašifrovaná fronta změn, jména místních profilů a omezená metadata zůstávají technickým dluhem.** Více informací a omezení: [OFFLINE.md](docs/OFFLINE.md).
+Pokud tento prohlížeč obsahuje původní nešifrované změny z vývojové verze, zůstanou v původní IndexedDB až do prvního odemknutí nebo vytvoření offline trezoru. Potom se nejprve zašifrují a po úspěšném zápisu se původní položky odstraní. Rozhraní na čekající migraci upozorní. **Neodstraňuj ručně data prohlížeče, pokud obsahují neodeslané změny.**
+
+Běžné online odhlášení nyní **nesmaže** šifrovanou offline knihovnu ani čekající změny; trezor se zamkne. Pro úplné smazání slouží **Smazat offline data**. Samotná volba pro vypnutí offline článků nepovolí smazání trezoru s čekajícími změnami.
+
+**Omezení:** Nejsou lokálně uložené originální obrázky, videa ani plné texty externích webů. Zobrazují se RSS texty a metadata, která byla dříve načtena. Místní označení profilu/UUID a metadata šifrovaného záznamu zůstávají čitelná. Služba není připravena k veřejnému nasazení. Podrobnosti viz [OFFLINE.md](docs/OFFLINE.md).
