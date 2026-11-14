@@ -65,6 +65,7 @@ export function App(){
   const [vaultRepeat,setVaultRepeat]=useState("");
   const [vaultBusy,setVaultBusy]=useState(false);
   const [queueItems,setQueueItems]=useState<QueuedChange[]>([]);
+  const [legacyCount,setLegacyCount]=useState(0);
   const [token,setToken]=useState("");
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState("");
@@ -94,6 +95,8 @@ export function App(){
   });
   const opmlInput=useRef<HTMLInputElement>(null);
   const [opmlBusy,setOpmlBusy]=useState(false);
+  const lockedVault=Boolean(userId&&!isVaultUnlocked(userId)&&
+    vaultProfiles.some(profile=>profile.userId===userId));
   const pendingCount=queueItems.filter(item=>item.status==="pending").length;
   const conflictCount=queueItems.filter(item=>item.status==="conflict").length;
   const refreshQueue=useCallback(async(user:string)=>{
@@ -287,6 +290,15 @@ export function App(){
 
   useEffect(()=>{
     if(!token||!userId)return;
+    let active=true;
+    void legacyChangeCount(userId).then(count=>{
+      if(active)setLegacyCount(count);
+    }).catch(()=>{});
+    return()=>{active=false;};
+  },[token,userId,cacheAllowed]);
+
+  useEffect(()=>{
+    if(!token||!userId)return;
     void refreshQueue(userId);
     const refresh=()=>{
       if(!document.hidden){
@@ -390,7 +402,7 @@ export function App(){
     lockVault(currentUser.current);
     currentUser.current="";setUserId("");setToken("");setSessionUser("");
     setEntries([]);setFeeds([]);setQueueItems([]);setCursor(null);
-    setOfflineUnlocked(false);setCacheAllowed(false);setOffline(false);
+    setOfflineUnlocked(false);setCacheAllowed(false);setOffline(false);setLegacyCount(0);
     setActive(null);setSearch("");setNotice("");
   }
   async function logout(){
@@ -403,7 +415,7 @@ export function App(){
       lockVault(user);
       currentUser.current="";setUserId("");setToken("");setSessionUser("");
       setEntries([]);setFeeds([]);setQueueItems([]);setOffline(false);setCacheAllowed(false);
-      setOfflineUnlocked(false);setVaultProfiles(await listVaultProfiles());
+      setOfflineUnlocked(false);setLegacyCount(0);setVaultProfiles(await listVaultProfiles());
       syncCursor.current={after:new Date(Date.now()-60_000).toISOString(),
         afterId:"00000000-0000-0000-0000-000000000000"};
     }catch(error){
@@ -436,6 +448,7 @@ export function App(){
       if(!selectedVault)throw Error("Vyber offline profil.");
       const {profile,snapshot}=await unlockVault(selectedVault,unlockPhrase);
       const migrated=await migrateLegacyQueue(profile.userId);
+      setLegacyCount(0);
       const pending=await getChanges(profile.userId);
       if(migrated)setNotice("Převedeno "+migrated+" starších změn do šifrované fronty.");
       currentUser.current=profile.userId;
@@ -464,6 +477,7 @@ export function App(){
         await unlockVault(user,vaultPhrase);
       }
       const migrated=await migrateLegacyQueue(user);
+      setLegacyCount(0);
       setVaultDialog(null);setVaultPhrase("");setVaultRepeat("");
       setCacheAllowed(true);
       setVaultProfiles(await listVaultProfiles());
@@ -746,16 +760,29 @@ export function App(){
         </div>
         {error?<div role="alert" className="alert error">{error}</div>:null}
         {notice?<div role="status" className="alert success">{notice}</div>:null}
+        {lockedVault?<div className="alert error" role="status">
+          Místní trezor je uzamčený. Čekající změny nelze přečíst ani
+          synchronizovat, dokud nezadáš offline heslo.
+        </div>:null}
+        {legacyCount>0?<div className="alert error" role="status">
+          {legacyCount} starších nešifrovaných změn čeká na převod.
+          Odemkni nebo vytvoř trezor; původní data se odstraní až po
+          úspěšném šifrovaném uložení.
+        </div>:null}
         <div className={"offline-status "+(offline?"is-offline":"")}>
-          <span>{offlineUnlocked&&!token?"Offline trezor – bez serverové relace":offline?"Offline: naposledy uložené články":"Online synchronizace"} ·
-            {cacheAllowed?" kopie článků zapnuta":" kopie článků vypnuta"}</span>
+          <span>{offlineUnlocked&&!token?"Offline trezor – bez serverové relace":
+            offline?"Offline: naposledy uložené články":"Online synchronizace"} ·
+            {cacheAllowed?" šifrovaná kopie přístupná":
+              lockedVault?" šifrovaná kopie zamčená":" offline kopie vypnutá"}</span>
           <button type="button" disabled={!token} aria-pressed={cacheAllowed}
-            title="Lokální texty a URL nejsou šifrované"
+            title="Šifrované články a zašifrovaná fronta změn"
             onClick={()=>void toggleArticleCache()}>
-            {cacheAllowed?"Vypnout offline články":"Zapnout offline články"}</button>
-          <strong>Čeká na odeslání: {pendingCount}</strong>
+            {cacheAllowed?"Smazat offline trezor":
+              lockedVault?"Odemknout trezor":"Zapnout offline články"}</button>
+          <strong>{lockedVault?"Fronta: zamčená":
+            "Čeká na odeslání: "+pendingCount}</strong>
           {conflictCount?<strong className="offline-conflict">{conflictCount} konfliktů</strong>:null}
-          <button type="button" disabled={!token} onClick={()=>void flushOffline(token,userId)}>Synchronizovat</button>
+          <button type="button" disabled={!token||lockedVault} onClick={()=>void flushOffline(token,userId)}>Synchronizovat</button>
           <button type="button" onClick={()=>void wipeLocalCache()}>Smazat offline data</button>
         </div>
         {conflictCount>0?<div className="offline-conflicts" role="region" aria-label="Konflikty synchronizace">
