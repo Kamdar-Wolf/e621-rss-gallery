@@ -43,3 +43,26 @@ test("entries with no link and no guid are skipped",()=>{
 const f=parseFeed('<rss><channel><title>X</title><item><title>No id</title></item></channel></rss>');
 assert.equal(f.entries.length,0);
 });
+
+test("MediaRSS groups preserve 3 ordered distinct attachments and reject unsafe URLs",()=>{
+  const xml=`<?xml version="1.0"?>
+    <rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+    <channel><title>Series</title><item>
+      <guid>https://example.org/comic</guid><title>Three pages</title>
+      <enclosure url="https://example.org/page1.png" type="image/png"/>
+      <media:group>
+        <media:content url="https://example.org/page2.webp" type="image/webp"/>
+        <media:content url="https://example.org/page3.jpg" type="image/jpeg"/>
+        <media:content url="https://example.org/page2.webp" type="image/webp"/>
+        <media:content url="javascript:alert(1)" type="image/png"/>
+      </media:group>
+    </item></channel></rss>`;
+  const media=parseFeed(xml).entries[0].media;
+  assert.deepEqual(media.map(item=>item.url),[
+    "https://example.org/page1.png",
+    "https://example.org/page2.webp",
+    "https://example.org/page3.jpg"
+  ]);
+  assert.deepEqual(media.map(item=>item.position),[0,1,2]);
+  assert.ok(media.every(item=>item.type==="image"));
+});

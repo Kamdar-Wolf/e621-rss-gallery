@@ -145,8 +145,9 @@ export function buildApp(pool: pg.Pool, devToken?: string) {
     const {rows}=await pool.query(
       `SELECT e.id,e.feed_id,e.source_url,e.title,e.author,e.summary,e.media_type,e.published_at,e.created_at,
               es.read_at,es.starred_at,es.saved_at,es.revision::int AS revision,es.updated_at AS state_updated_at,
-              (SELECT m.source_url FROM entry_media m WHERE m.entry_id=e.id
-                ORDER BY m.position ASC LIMIT 1) AS thumbnail
+              (SELECT m.source_url FROM entry_media m WHERE m.entry_id=e.id AND m.kind='image'
+                ORDER BY m.position ASC,m.id ASC LIMIT 1) AS thumbnail,
+              (SELECT COUNT(*)::int FROM entry_media m WHERE m.entry_id=e.id) AS media_count
          FROM entries e
          JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1
          LEFT JOIN entry_states es ON es.entry_id=e.id AND es.user_id=$1
@@ -170,8 +171,9 @@ export function buildApp(pool: pg.Pool, devToken?: string) {
     const {rows}=await pool.query(
       `SELECT e.id,e.feed_id,e.source_url,e.title,e.author,e.summary,e.media_type,e.published_at,e.created_at,
               es.read_at,es.starred_at,es.saved_at,es.revision::int AS revision,es.updated_at AS state_updated_at,
-              (SELECT m.source_url FROM entry_media m WHERE m.entry_id=e.id
-                 ORDER BY m.position ASC LIMIT 1) AS thumbnail
+              (SELECT m.source_url FROM entry_media m WHERE m.entry_id=e.id AND m.kind='image'
+                ORDER BY m.position ASC,m.id ASC LIMIT 1) AS thumbnail,
+              (SELECT COUNT(*)::int FROM entry_media m WHERE m.entry_id=e.id) AS media_count
          FROM entries e JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$1
          LEFT JOIN entry_states es ON es.entry_id=e.id AND es.user_id=$1
         WHERE ($2::uuid IS NULL OR e.feed_id=$2::uuid)
@@ -183,6 +185,37 @@ export function buildApp(pool: pg.Pool, devToken?: string) {
     const last=rows.at(-1);
     return {items:rows,nextCursor:rows.length===limit&&last?
       {before:last.published_at||last.created_at,beforeId:last.id}:null};
+  });
+
+  // Only subscribers may retrieve the media gallery of a private entry.
+  // API returns metadata, not remote bytes: avoids proxying arbitrary URLs.
+  app.get("/v1/entries/:id/media",async(req,reply)=>{
+    const id=(req.params as {id?:string}).id;
+    if(!id || !z.uuid().safeParse(id).success)
+      return reply.code(400).send({error:"Invalid entry id"});
+    const visible=await pool.query(
+      "SELECT 1 FROM entries e JOIN subscriptions s ON s.feed_id=e.feed_id "+
+      "WHERE e.id=$1 AND s.user_id=$2 LIMIT 1",[id,req.readerUserId!]);
+    if(!visible.rows.length)return reply.code(404).send({error:"Entry not found"});
+    const media=await pool.query<{
+      id:string;source_url:string;mime_type:string|null;kind:string;
+      position:number;width:number|null;height:number|null
+    }>(
+      "SELECT id,source_url,mime_type,kind,position,width,height "+
+      "FROM entry_media WHERE entry_id=$1 "+
+      "ORDER BY position ASC,id ASC LIMIT 32",[id]);
+    const items=media.rows.filter(row=>{
+      try{
+        const url=new URL(row.source_url);
+        return (url.protocol==="https:"||url.protocol==="http:")&&
+          !url.username&&!url.password&&url.href.length<=4096&&
+          ["image","video","audio"].includes(row.kind);
+      }catch{return false;}
+    }).map(row=>({
+      id:row.id,url:row.source_url,kind:row.kind,mimeType:row.mime_type,
+      position:row.position,width:row.width,height:row.height
+    }));
+    return {entryId:id,items};
   });
 
   const syncSchema=z.object({

@@ -1,5 +1,6 @@
 import {useCallback,useEffect,useMemo,useRef,useState, type ChangeEvent, type FormEvent} from "react";
 import {api,ApiError,type AuthSession,type SyncPage,type Feed,type Entry,type EntryPage,type Cursor,type Stats} from "./api.js";
+import {MediaGallery,safeMediaUrl} from "./MediaGallery.js";
 import {cacheSnapshot,clearOfflineUser,flushChanges,getChanges,getSnapshot,overlayChanges,
   getCachePreference,queueChange,resolveConflict,legacyChangeCount,migrateLegacyQueue,
   type QueuedChange,type OfflineField,type RemoteState} from "./offline.js";
@@ -30,7 +31,9 @@ function Tile({entry,layout,source,onSelect,onStar,onRead}:{
   return <article className={"tile "+layout+(entry.read_at?" read":"")}>
     <button className="tile-open" type="button" onClick={()=>onSelect(entry)}
       aria-label={"Otevřít "+entry.title}>
-      <TileImage src={entry.thumbnail} alt={entry.title}/>
+      <TileImage src={safeMediaUrl(entry.thumbnail)} alt={entry.title}/>
+      {(entry.media_count??0)>1?<span className="media-count">
+        {entry.media_count} příloh</span>:null}
       <div className="tile-text">
         <span className="source-label">{source}</span>
         <h3>{entry.title}</h3>
@@ -840,7 +843,9 @@ export function App(){
         </div>
         <div className="reader-scroll"><div className="eyebrow">{active.published_at?dateFmt.format(new Date(active.published_at)):"Bez data"} · {active.media_type}</div>
           <h2>{active.title}</h2>
-          <TileImage src={offlineUnlocked&&!token?null:active.thumbnail} alt={active.title}/>
+          <MediaGallery key={active.id} entryId={active.id}
+            title={active.title} preview={active.thumbnail} csrf={token}
+            offline={offline||!token} onError={message=>setError(message)}/>
           {active.author?<p className="author">Autor: {active.author}</p>:null}
           <p className="reader-summary">{active.summary||"Zdroj neposkytuje textový popis příspěvku."}</p>
           {active.source_url?<a className="primary reader-link" href={active.source_url} target="_blank" rel="noopener noreferrer">
@@ -867,7 +872,7 @@ export function App(){
               autoComplete="new-password" value={vaultRepeat}
               onChange={event=>setVaultRepeat(event.target.value)}/></label>:null}
           <p>Obsah bude chráněn AES-GCM; odvození klíče používá PBKDF2.
-            Offline fronta stavů zatím zůstává mimo šifrovaný trezor.</p>
+            Položky pro offline synchronizaci se ukládají šifrovaně.</p>
           <button className="primary" type="submit" disabled={vaultBusy}>
             {vaultBusy?"Zpracovávám…":vaultDialog==="create"?"Vytvořit trezor":"Odemknout trezor"}
           </button>

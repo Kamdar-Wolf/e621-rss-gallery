@@ -5,11 +5,17 @@ export interface Feed {
 }
 export interface Entry {
   id:string;feed_id:string;source_url:string;title:string;author:string|null;
+  media_count?:number;
   summary:string|null;media_type:string;published_at:string|null;
   created_at:string;thumbnail:string|null;
   read_at:string|null;starred_at:string|null;saved_at:string|null;
   revision:number|null;state_updated_at:string|null;
 }
+export type EntryMedia={
+  id:string;url:string;kind:"image"|"video"|"audio";mimeType:string|null;
+  position:number;width:number|null;height:number|null;
+};
+export interface EntryMediaPage {entryId:string;items:EntryMedia[]}
 export interface Cursor {before:string;beforeId:string}
 export interface EntryPage {items:Entry[];nextCursor:Cursor|null}
 export interface Stats {subscriptions:number;entries:number;unread:number;starred:number;saved:number}
