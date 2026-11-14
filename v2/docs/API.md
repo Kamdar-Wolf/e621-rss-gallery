@@ -33,3 +33,11 @@ Prohlížeč používá **same-origin** `/api/v1/...` (Vite proxy směruje na lo
 - Jde o **polling**; není implementován WebSocket, push ani bezpečná offline fronta.
 
 Další podrobnosti a provozní omezení viz [AUTH.md](AUTH.md) a [SYNC.md](SYNC.md).
+
+## Multimédia
+
+- `GET /v1/entries/<UUID>/media` – metadata nejvýše 32 příloh, seřazená podle pozice v RSS. Vyžaduje přihlášeného uživatele se skutečným odběrem příslušného kanálu. Neexistující či nesledované položky vrací **404**.
+- Každá položka obsahuje `id`, `url`, `kind` (`image`, `video`, `audio`), `mimeType`, `position`, `width`, `height`. Do odpovědi se nezahrnují neplatná schémata URL a jiné nepodporované typy.
+- `GET /v1/entries` a `GET /v1/search` vrací také `media_count`. Pole `thumbnail` nyní vybírá pouze obrázkové přílohy, takže video či audio nejsou zaměněny za obrázek.
+- **API nepřenáší binární soubory ani nefunguje jako obecný proxy server.** Online prohlížeč načítá veřejné soubory přímo ze zdrojové domény, pokud je poskytovatel povoluje. U nefunkčních obrázků nabízí otevření originální adresy.
+- Další technické a bezpečnostní podmínky viz [MEDIA.md](MEDIA.md).

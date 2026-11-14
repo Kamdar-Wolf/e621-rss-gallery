@@ -58,7 +58,7 @@ export function MediaGallery({entryId,title,preview,csrf,offline,userId,onError}
   useEffect(()=>{
     let live=true;
     const urls:string[]=[];
-    setCachedRows([]);setLocalMedia([]);setCacheNotice("");
+    setCachedRows([]);setLocalMedia([]);
     if(!userId||!isVaultUnlocked(userId))return;
     void cachedImages(userId,entryId).then(images=>{
       if(!live)return;

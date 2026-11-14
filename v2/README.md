@@ -10,7 +10,7 @@
 - Izolace odběrů a uživatelských stavů mezi účty.
 - První synchronizace stavu přečtení, oblíbených a uložených položek: API vrací změny a online klient je kontroluje přibližně každých 20 sekund. Při konfliktu revizí server neprovede tiché přepsání.
 
-**Dosud chybí:** automatizovaná migrace staré fronty bez znalosti offline hesla, synchronizace štítků/poznámek/nastavení, pokročilé zobrazení více obrázků, vlastní mediální proxy, skutečné produkční účty s MFA, zabezpečený provoz na veřejné doméně a testy původních zdrojů na cílovém serveru.
+**Dosud chybí:** dokončení synchronizace štítků/poznámek/nastavení, plnohodnotný offline archiv videí a audio souborů, vlastní bezpečný mediální proxy server, skutečné produkční účty s MFA, zabezpečený provoz na veřejné doméně a testy původních zdrojů na cílovém serveru.
 
 ## Spuštění na Windows – lokální vývoj
 
@@ -90,3 +90,15 @@ Pokud tento prohlížeč obsahuje původní nešifrované změny z vývojové ve
 Běžné online odhlášení nyní **nesmaže** šifrovanou offline knihovnu ani čekající změny; trezor se zamkne. Pro úplné smazání slouží **Smazat offline data**. Samotná volba pro vypnutí offline článků nepovolí smazání trezoru s čekajícími změnami.
 
 **Omezení:** Nejsou lokálně uložené originální obrázky, videa ani plné texty externích webů. Zobrazují se RSS texty a metadata, která byla dříve načtena. Místní označení profilu/UUID a metadata šifrovaného záznamu zůstávají čitelná. Služba není připravena k veřejnému nasazení. Podrobnosti viz [OFFLINE.md](docs/OFFLINE.md).
+
+## Multimediální prohlížeč
+
+Nová galerie v detailu příspěvku podporuje **až 32 obrázků, video a audio**. U obrázků je možné přecházet mezi stránkami, využívat režim celé obrazovky a zvětšení 2×. Na mobilu se galerie přizpůsobuje šířce displeje. API zpřístupňuje přílohy pouze uživateli, který daný kanál sleduje.
+
+### Šifrované offline obrázky
+
+Pokud je otevřený místní trezor, můžeš u online obrázku stisknout **Uložit obrázek offline**. Obrázek se stáhne pouze na přímý pokyn, ověří se jeho formát a velikost a uloží do AES-GCM šifrované IndexedDB v tomto prohlížeči. Lze jej znovu otevřít po odemknutí trezoru i bez serveru.
+
+Limity první verze: **5 MiB na obrázek, 48 MiB celkem, maximálně 120 souborů na účet**. Podporovány jsou JPEG, PNG, WebP, GIF a AVIF přes HTTPS. Zdroj musí umožňovat načtení přes CORS; jinak aplikace obrázek neuloží a zobrazí informaci. Žádné obrázky se automaticky nestahují ani nepublikují do veřejného repozitáře. Jednotlivé uložené obrázky lze z galerie odstranit.
+
+Podrobnosti, omezení a testy viz [MEDIA.md](docs/MEDIA.md).
