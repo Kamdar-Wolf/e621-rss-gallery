@@ -184,6 +184,8 @@ test("offline queue is encrypted at rest and survives an unlock cycle",async()=>
   assert.equal((await getChanges(userA)).length,before.length);
 });
 test("legacy plaintext queue is encrypted before it is erased, with idempotent migration",async()=>{
+  // Initialize the old database schema before injecting a simulated v3 record.
+  assert.equal(await legacyChangeCount(userA),0);
   const legacyId=other.id+":read";
   const oldChange:QueuedChange={
     id:userA+":"+legacyId,userId:userA,entryId:other.id,
