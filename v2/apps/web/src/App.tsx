@@ -136,9 +136,10 @@ export function App(){
         if(currentUser.current!==user)return;
         setFeeds(sources.items);setEntries(items);setCursor(page.nextCursor);
         setStats(summary);
-        // Cache server data only. Pending user edits remain in the separate queue.
-        void cacheSnapshot(user,sources.items,page.items,summary)
-          .catch(()=>setNotice("Offline úložiště není dostupné; data zůstávají jen v této kartě."));
+        // Wait for the encrypted write to complete before considering the
+        // newly enabled offline library populated; never cache a plaintext copy.
+        await cacheSnapshot(user,sources.items,page.items,summary)
+          .catch(()=>setNotice("Šifrovaný trezor nelze aktualizovat; články zůstaly jen v této kartě."));
       }
       setOffline(false);
       setQueueItems(queue);
