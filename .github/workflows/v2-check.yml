@@ -1,0 +1,63 @@
+name: Kamdar Reader v2 - typecheck and tests
+on:
+  push:
+    branches: ["dev/**"]
+    paths: ["v2/**", ".github/workflows/v2-check.yml"]
+  pull_request:
+    paths: ["v2/**", ".github/workflows/v2-check.yml"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: reader
+          POSTGRES_USER: reader
+          POSTGRES_PASSWORD: ci_reader_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U reader -d reader"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgresql://reader:ci_reader_password@127.0.0.1:5432/reader
+      READER_API_TOKEN: test_only_random_very_long_token_123456789123
+      ALLOW_DEV_TOKEN: 'true'
+      READER_SESSION_SECRET: ci_testing_secret_only_not_for_real_use_123456789
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install
+        run: npm install --no-audit --no-fund
+      - name: Typecheck
+        run: npm run check
+      - name: Unit tests
+        run: npm test
+      - name: Apply migrations
+        run: npm run migrate
+      - name: Integration tests
+        run: npm run test:integration
+      - name: Web client build
+        run: npm run build:web
+      - name: Verify offline shell artifact
+        run: |
+          test -f dist-web/sw.js
+          grep -q 'kr-app-shell-v1' dist-web/sw.js
+      - name: Archive built web client
+        uses: actions/upload-artifact@v4
+        with:
+          name: kamdar-reader-v2-web
+          path: v2/dist-web
+          retention-days: 3
+      - name: Docker image build
+        run: docker build -t kamdar-reader-v2-ci .

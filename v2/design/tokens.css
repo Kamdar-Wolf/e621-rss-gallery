@@ -1,0 +1,37 @@
+:root {
+  --kr-bg: #0b101b;
+  --kr-surface-1: #101725;
+  --kr-surface-2: #151f2f;
+  --kr-line: #283649;
+  --kr-foreground: #edf3fc;
+  --kr-muted: #96a5ba;
+  --kr-accent: #729dff;
+  --kr-accent-hover: #5684ee;
+  --kr-success: #48c7a2;
+  --kr-danger: #e5767d;
+  --kr-warning: #e5b56a;
+  --kr-radius-sm: 8px;
+  --kr-radius-md: 12px;
+  --kr-radius-lg: 16px;
+  --kr-space-1: 4px;
+  --kr-space-2: 8px;
+  --kr-space-3: 12px;
+  --kr-space-4: 16px;
+  --kr-space-6: 24px;
+  --kr-space-8: 32px;
+  --kr-font-sans: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --kr-sidebar-width: 256px;
+  --kr-reader-min-width: 420px;
+  --kr-motion-fast: 120ms;
+}
+[data-theme="light"] {
+  --kr-bg: #f6f8fb;
+  --kr-surface-1: #ffffff;
+  --kr-surface-2: #f0f4fa;
+  --kr-line: #d9e2ed;
+  --kr-foreground: #152238;
+  --kr-muted: #5d718b;
+  --kr-accent: #285fc5;
+  --kr-accent-hover: #184dae;
+}
+@media(prefers-reduced-motion:reduce){:root{--kr-motion-fast:0ms}}
