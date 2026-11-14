@@ -10,7 +10,7 @@
 - Izolace odběrů a uživatelských stavů mezi účty.
 - První synchronizace stavu přečtení, oblíbených a uložených položek: API vrací změny a online klient je kontroluje přibližně každých 20 sekund. Při konfliktu revizí server neprovede tiché přepsání.
 
-**Dosud chybí:** offline fronta změn, synchronizace štítků/poznámek/nastavení, pokročilé zobrazení více obrázků, vlastní mediální proxy, skutečné produkční účty s MFA, zabezpečený provoz na veřejné doméně a testy původních zdrojů na cílovém serveru.
+**Dosud chybí:** šifrování offline fronty změn, synchronizace štítků/poznámek/nastavení, pokročilé zobrazení více obrázků, vlastní mediální proxy, skutečné produkční účty s MFA, zabezpečený provoz na veřejné doméně a testy původních zdrojů na cílovém serveru.
 
 ## Spuštění na Windows – lokální vývoj
 
@@ -77,6 +77,12 @@ Workflow `.github/workflows/v2-check.yml` ověřuje TypeScript, testy validace, 
 
 ## Offline režim (první etapa)
 
-Po výslovném zapnutí offline kopie umí otevřená přihlášená karta při výpadku spojení zobrazit naposledy uložené textové články. Bez ohledu na tuto volbu zařazuje změny přečtení, oblíbených a uložených položek do lokální fronty, aby se neztratily při přerušení připojení. Po obnovení spojení se změny pošlou serveru, který kontroluje revize a případné konflikty. Aplikace ukazuje počet čekajících změn a umožní je vyřešit. Při zapnutí offline kopie upozorňuje, že obsah a adresy zdrojů v IndexedDB nejsou šifrovány. Synchronizace používá generační značky změn a v podporovaných prohlížečích zámek pro více otevřených karet.
+Po výslovném zapnutí offline kopie umí otevřená přihlášená karta při výpadku spojení zobrazit naposledy uložené textové články. Bez ohledu na tuto volbu zařazuje změny přečtení, oblíbených a uložených položek do lokální fronty, aby se neztratily při přerušení připojení. Po obnovení spojení se změny pošlou serveru, který kontroluje revize a případné konflikty. Aplikace ukazuje počet čekajících změn a umožní je vyřešit. Při zapnutí offline kopie uživatel vytváří samostatné offline heslo. Obsah a adresy zdrojů se šifrují AES-GCM. Fronta změn stále obsahuje nezašifrovaná metadata. Synchronizace používá generační značky změn a v podporovaných prohlížečích zámek pro více otevřených karet.
 
-**Nejde ještě o plný offline archiv:** po restartu prohlížeče bez internetu není možné bezpečně ověřit relaci; obrázky a video se neukládají. Detaily, zabezpečení a testy: [OFFLINE.md](docs/OFFLINE.md).
+**Nejde ještě o plný offline archiv:** po restartu prohlížeče lze offline trezor odemknout samostatným heslem, ale tím se neobnoví serverová relace. Obrázky a video se neukládají. Detaily, zabezpečení a testy: [OFFLINE.md](docs/OFFLINE.md).
+
+## Šifrovaná offline knihovna
+
+Po online přihlášení zvol **Zapnout offline články**, vytvoř samostatné offline heslo (min. 12 znaků) a potvrď jeho uložení. Při novém otevření aplikace bez serveru použij na přihlašovací obrazovce **Odemknout offline knihovnu** a vyber odpovídající místní profil. Tím se odemknou jen články uložené v tomto prohlížeči, nikoli serverový účet.
+
+Články jsou šifrovány AES-GCM-256 s klíčem odvozeným z hesla PBKDF2-HMAC-SHA256; úložiště heslo nezachovává. **Nezašifrovaná fronta změn, jména místních profilů a omezená metadata zůstávají technickým dluhem.** Více informací a omezení: [OFFLINE.md](docs/OFFLINE.md).
