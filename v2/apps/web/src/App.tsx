@@ -844,7 +844,7 @@ export function App(){
         <div className="reader-scroll"><div className="eyebrow">{active.published_at?dateFmt.format(new Date(active.published_at)):"Bez data"} · {active.media_type}</div>
           <h2>{active.title}</h2>
           <MediaGallery key={active.id} entryId={active.id}
-            title={active.title} preview={active.thumbnail} csrf={token}
+            title={active.title} preview={active.thumbnail} csrf={token} userId={userId}
             offline={offline||!token} onError={message=>setError(message)}/>
           {active.author?<p className="author">Autor: {active.author}</p>:null}
           <p className="reader-summary">{active.summary||"Zdroj neposkytuje textový popis příspěvku."}</p>

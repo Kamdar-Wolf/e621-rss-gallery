@@ -241,3 +241,9 @@ a{text-decoration:none;color:inherit}
  .media-lightbox-top button,.media-lightbox-top a{font-size:11px;padding:7px}
  .media-toolbar{gap:5px}
 }
+
+/* Explicit encrypted image caching: no automatic prefetch, quota shown on errors. */
+.media-cache-notice{padding:10px 13px;border-radius:9px;margin:7px 0 11px;
+  border:1px solid var(--line);background:var(--highlight);
+  color:var(--text);font-size:12px;line-height:1.6}
+.media-toolbar button:disabled{opacity:.5;cursor:wait}

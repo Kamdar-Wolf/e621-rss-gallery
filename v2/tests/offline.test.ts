@@ -8,7 +8,7 @@ import {cacheSnapshot,getSnapshot,queueChange,getChanges,overlayChanges,
   migrateLegacyQueue,legacyChangeCount,type RemoteState,type QueuedChange} from "../apps/web/src/offline.js";
 import type {Entry,Feed,Stats} from "../apps/web/src/api.js";
 import {createVault,unlockVault,lockVault,listVaultProfiles,isVaultUnlocked,
-  vaultExists} from "../apps/web/src/offline-vault.js";
+  vaultExists,cacheImage,cachedImages,deleteCachedImage} from "../apps/web/src/offline-vault.js";
 
 const userA="00000000-0000-4000-8000-000000000001";
 const userB="00000000-0000-4000-8000-000000000002";
@@ -161,7 +161,7 @@ test("offline queue is encrypted at rest and survives an unlock cycle",async()=>
   const before=await getChanges(userA);
   assert.ok(before.length>=1);
   const database=await new Promise<IDBDatabase>((resolve,reject)=>{
-    const request=indexedDB.open("kamdar-reader-vault-v1",2);
+    const request=indexedDB.open("kamdar-reader-vault-v1",3);
     request.onsuccess=()=>resolve(request.result);
     request.onerror=()=>reject(request.error);
   });
@@ -213,7 +213,7 @@ test("legacy plaintext queue is encrypted before it is erased, with idempotent m
 test("queue content authentication rejects tampering",async()=>{
   await queueChange(userB,other,"saved",true);
   const db=await new Promise<IDBDatabase>((resolve,reject)=>{
-    const request=indexedDB.open("kamdar-reader-vault-v1",2);
+    const request=indexedDB.open("kamdar-reader-vault-v1",3);
     request.onsuccess=()=>resolve(request.result);
     request.onerror=()=>reject(request.error);
   });
@@ -239,6 +239,61 @@ test("queue content authentication rejects tampering",async()=>{
   });
   db.close();
   assert.equal((await getChanges(userB)).length,1);
+});
+test("encrypted offline image cache stores real PNG bytes privately and survives unlock",async()=>{
+  const validPng=Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLTTAAAAABJRU5ErkJggg==",
+    "base64");
+  const original=globalThis.fetch;
+  const source="https://images.example.org/single.png";
+  globalThis.fetch=async()=>new Response(validPng,{
+    status:200,headers:{"Content-Type":"image/png"}
+  });
+  try{
+    const result=await cacheImage(userB,other.id,source,0);
+    assert.ok(result.id.startsWith(userB+":"+other.id+":"));
+    assert.equal(result.bytes,validPng.length);
+    const cached=await cachedImages(userB,other.id);
+    assert.equal(cached.length,1);
+    assert.equal(cached[0].url,source);
+    assert.deepEqual(Buffer.from(await cached[0].blob.arrayBuffer()),validPng);
+    assert.equal((await cachedImages(userA,other.id)).length,0);
+    const db=await new Promise<IDBDatabase>((resolve,reject)=>{
+      const r=indexedDB.open("kamdar-reader-vault-v1",3);
+      r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);
+    });
+    const row=await new Promise<{ciphertext:ArrayBuffer;iv:Uint8Array}>((resolve,reject)=>{
+      const req=db.transaction("media","readonly").objectStore("media").get(result.id);
+      req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+    });
+    assert.ok(row.ciphertext.byteLength>validPng.length);
+    assert.equal(Buffer.from(row.ciphertext).includes(validPng),false);
+    assert.equal(Buffer.from(row.ciphertext).includes(Buffer.from(source)),false);
+    db.close();
+    lockVault(userB);
+    assert.equal((await cachedImages(userB,other.id)).length,0);
+    await unlockVault(userB,"another-long-test-passphrase-b");
+    assert.equal((await cachedImages(userB,other.id)).length,1);
+    await deleteCachedImage(userB,result.id);
+    assert.equal((await cachedImages(userB,other.id)).length,0);
+  }finally{globalThis.fetch=original;}
+});
+test("image cache rejects spoofed content types and oversized responses",async()=>{
+  const source="https://images.example.org/bad.png";
+  const original=globalThis.fetch;
+  try{
+    globalThis.fetch=async()=>new Response("not a PNG",{
+      status:200,headers:{"Content-Type":"image/png"}
+    });
+    await assert.rejects(cacheImage(userB,other.id,source,0),/validní obrázek/);
+    globalThis.fetch=async()=>new Response("oversized",{
+      status:200,headers:{"Content-Type":"image/png",
+        "Content-Length":String(6*1024*1024)}
+    });
+    await assert.rejects(cacheImage(userB,other.id,source,0),/limit 5 MiB/);
+    await assert.rejects(cacheImage(userB,other.id,"http://images.example.org/image.png",0),
+      /HTTPS/);
+  }finally{globalThis.fetch=original;}
 });
 test("per-user data are deleted without impacting another account",async()=>{
   await clearOfflineUser(userA);
