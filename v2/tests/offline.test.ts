@@ -4,7 +4,8 @@ import "fake-indexeddb/auto";
 import {webcrypto} from "node:crypto";
 if(!globalThis.crypto)Object.defineProperty(globalThis,"crypto",{value:webcrypto});
 import {cacheSnapshot,getSnapshot,queueChange,getChanges,overlayChanges,
-  flushChanges,resolveConflict,clearOfflineUser,getCachePreference,type RemoteState} from "../apps/web/src/offline.js";
+  flushChanges,resolveConflict,clearOfflineUser,getCachePreference,
+  migrateLegacyQueue,legacyChangeCount,type RemoteState,type QueuedChange} from "../apps/web/src/offline.js";
 import type {Entry,Feed,Stats} from "../apps/web/src/api.js";
 import {createVault,unlockVault,lockVault,listVaultProfiles,isVaultUnlocked,
   vaultExists} from "../apps/web/src/offline-vault.js";
@@ -154,6 +155,87 @@ test("locking encrypted vault hides articles without destroying unsent status",a
   assert.equal(await getSnapshot(userA),null);
   assert.equal((await getChanges(userA)).length,1);
   await unlockVault(userA,"a-long-test-passphrase-for-user-a");
+});
+test("offline queue is encrypted at rest and survives an unlock cycle",async()=>{
+  const before=await getChanges(userA);
+  assert.ok(before.length>=1);
+  const database=await new Promise<IDBDatabase>((resolve,reject)=>{
+    const request=indexedDB.open("kamdar-reader-vault-v1",2);
+    request.onsuccess=()=>resolve(request.result);
+    request.onerror=()=>reject(request.error);
+  });
+  const record=await new Promise<{iv:Uint8Array;ciphertext:ArrayBuffer}>((resolve,reject)=>{
+    const req=database.transaction("queues","readonly").objectStore("queues").get(userA);
+    req.onsuccess=()=>resolve(req.result);
+    req.onerror=()=>reject(req.error);
+  });
+  assert.ok(record);
+  assert.equal(record.iv.length,12);
+  const bytes=Buffer.from(record.ciphertext);
+  assert.ok(bytes.length>35);
+  assert.equal(bytes.includes(Buffer.from(entryId)),false);
+  assert.equal(bytes.includes(Buffer.from('"desired":true')),false);
+  database.close();
+  lockVault(userA);
+  await assert.rejects(queueChange(userA,entry,"starred",true));
+  assert.equal((await getChanges(userA)).length,0);
+  await unlockVault(userA,"a-long-test-passphrase-for-user-a");
+  assert.equal((await getChanges(userA)).length,before.length);
+});
+test("legacy plaintext queue is encrypted before it is erased, with idempotent migration",async()=>{
+  const legacyId=other.id+":read";
+  const oldChange:QueuedChange={
+    id:userA+":"+legacyId,userId:userA,entryId:other.id,
+    field:"read",desired:true,baseValue:false,expectedRevision:0,
+    createdAt:Date.now(),updatedAt:Date.now(),status:"pending"
+  };
+  const db=await new Promise<IDBDatabase>((resolve,reject)=>{
+    const request=indexedDB.open("kamdar-reader-offline",4);
+    request.onsuccess=()=>resolve(request.result);
+    request.onerror=()=>reject(request.error);
+  });
+  await new Promise<void>((resolve,reject)=>{
+    const tx=db.transaction("queue","readwrite");
+    tx.objectStore("queue").put(oldChange);
+    tx.oncomplete=()=>resolve();
+    tx.onerror=()=>reject(tx.error);
+  });
+  db.close();
+  assert.equal(await legacyChangeCount(userA),1);
+  assert.equal(await migrateLegacyQueue(userA),1);
+  assert.equal(await legacyChangeCount(userA),0);
+  assert.equal(await migrateLegacyQueue(userA),0);
+  assert.ok((await getChanges(userA)).some(change=>change.id===oldChange.id));
+});
+test("queue content authentication rejects tampering",async()=>{
+  await queueChange(userB,other,"saved",true);
+  const db=await new Promise<IDBDatabase>((resolve,reject)=>{
+    const request=indexedDB.open("kamdar-reader-vault-v1",2);
+    request.onsuccess=()=>resolve(request.result);
+    request.onerror=()=>reject(request.error);
+  });
+  const record=await new Promise<{userId:string;iv:Uint8Array;ciphertext:ArrayBuffer;updatedAt:number}>((resolve,reject)=>{
+    const request=db.transaction("queues","readonly").objectStore("queues").get(userB);
+    request.onsuccess=()=>resolve(request.result);
+    request.onerror=()=>reject(request.error);
+  });
+  const tampered=record.ciphertext.slice(0);
+  new Uint8Array(tampered)[0]^=1;
+  await new Promise<void>((resolve,reject)=>{
+    const tx=db.transaction("queues","readwrite");
+    tx.objectStore("queues").put({...record,ciphertext:tampered});
+    tx.oncomplete=()=>resolve();
+    tx.onerror=()=>reject(tx.error);
+  });
+  await assert.rejects(getChanges(userB));
+  await new Promise<void>((resolve,reject)=>{
+    const tx=db.transaction("queues","readwrite");
+    tx.objectStore("queues").put(record);
+    tx.oncomplete=()=>resolve();
+    tx.onerror=()=>reject(tx.error);
+  });
+  db.close();
+  assert.equal((await getChanges(userB)).length,1);
 });
 test("per-user data are deleted without impacting another account",async()=>{
   await clearOfflineUser(userA);
