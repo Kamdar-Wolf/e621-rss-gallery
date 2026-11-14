@@ -1,7 +1,8 @@
 import type {Entry,Feed,Stats} from "./api.js";
+import {deleteVault,getVaultSnapshot,isVaultUnlocked,saveVaultSnapshot} from "./offline-vault.js";
 
 const DB_NAME="kamdar-reader-offline";
-const DB_VERSION=2;
+const DB_VERSION=3;
 const CACHE_LIMIT=500;
 const OP_LIMIT=1500;
 
@@ -45,8 +46,12 @@ function openDB():Promise<IDBDatabase>{
           db.createObjectStore("snapshots",{keyPath:"userId"});
         // The old development build cached personal feed URLs without opt-in.
         // Wipe those legacy snapshots during the privacy migration.
-        if(req.transaction && event.oldVersion<2)
+        if(req.transaction && event.oldVersion<3){
+          // Never retain old plaintext RSS snapshots from v1/v2.
           req.transaction.objectStore("snapshots").clear();
+          if(db.objectStoreNames.contains("prefs"))
+            req.transaction.objectStore("prefs").clear();
+        }
         if(!db.objectStoreNames.contains("prefs"))
           db.createObjectStore("prefs",{keyPath:"userId"});
         if(!db.objectStoreNames.contains("queue")){
@@ -86,53 +91,20 @@ function timestamp(entry:Entry):number{
   const t=new Date(entry.published_at||entry.created_at).getTime();
   return Number.isFinite(t)?t:0;
 }
+/** Snapshot and preference APIs now require an unlocked encrypted vault. */
 export async function getSnapshot(userId:string):Promise<OfflineSnapshot|null>{
-  validUser(userId);
-  const db=await openDB();
-  return new Promise((resolve,reject)=>{
-    const tx=db.transaction("snapshots","readonly");
-    const req=tx.objectStore("snapshots").get(userId);
-    req.onsuccess=()=>resolve(req.result||null);
-    req.onerror=()=>reject(req.error);
-  });
+  validateUser(userId);
+  return getVaultSnapshot(userId);
 }
-/** Plaintext article storage is disabled until the user explicitly opts in. */
 export async function getCachePreference(userId:string):Promise<boolean>{
-  validUser(userId);
-  const db=await openDB();
-  return new Promise((resolve,reject)=>{
-    const tx=db.transaction("prefs","readonly");
-    const req=tx.objectStore("prefs").get(userId);
-    req.onsuccess=()=>resolve(req.result?.enabled===true);
-    req.onerror=()=>reject(req.error);
-  });
+  validateUser(userId);
+  return isVaultUnlocked(userId);
 }
-export async function setCachePreference(userId:string,enabled:boolean):Promise<void>{
-  validUser(userId);
-  const db=await openDB();
-  const tx=db.transaction(["prefs","snapshots"],"readwrite");
-  const done=finished(tx);
-  tx.objectStore("prefs").put({userId,enabled});
-  if(!enabled)tx.objectStore("snapshots").delete(userId);
-  await done;
-}
-export async function cacheSnapshot(userId:string,feeds:Feed[],entries:Entry[],stats:Stats):Promise<void>{
-  validUser(userId);
-  if(!(await getCachePreference(userId)))return;
-  const db=await openDB();
-  const tx=db.transaction("snapshots","readwrite");
-  const end=finished(tx);
-  const store=tx.objectStore("snapshots");
-  const read=store.get(userId);
-  read.onsuccess=()=>{
-    const previous=read.result as OfflineSnapshot|undefined;
-    const merged=new Map<string,Entry>();
-    for(const entry of previous?.entries||[])merged.set(entry.id,entry);
-    for(const entry of entries)merged.set(entry.id,entry);
-    const retained=[...merged.values()].sort((a,b)=>timestamp(b)-timestamp(a)).slice(0,CACHE_LIMIT);
-    store.put({userId,feeds,entries:retained,stats,savedAt:Date.now()} satisfies OfflineSnapshot);
-  };
-  await end;
+export async function cacheSnapshot(
+  userId:string,feeds:Feed[],entries:Entry[],stats:Stats
+):Promise<void>{
+  validateUser(userId);
+  await saveVaultSnapshot(userId,feeds,entries,stats);
 }
 export async function getChanges(userId:string):Promise<QueuedChange[]>{
   validUser(userId);
@@ -329,4 +301,5 @@ export async function clearOfflineUser(userId:string):Promise<void>{
     if(row){row.delete();row.continue();}
   };
   await done;
+  await deleteVault(userId);
 }
