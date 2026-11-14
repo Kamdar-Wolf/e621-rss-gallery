@@ -15,7 +15,7 @@ interface QueueRecord {
 }
 
 const DB_NAME="kamdar-reader-vault-v1";
-const DB_VERSION=2;
+const DB_VERSION=3;
 const PBKDF2_ITERATIONS=350_000;
 const MAX_ENTRIES=500;
 const encoder=new TextEncoder();
@@ -54,6 +54,11 @@ function db():Promise<IDBDatabase>{
         req.result.createObjectStore("vaults",{keyPath:"userId"});
       if(!req.result.objectStoreNames.contains("queues"))
         req.result.createObjectStore("queues",{keyPath:"userId"});
+      if(!req.result.objectStoreNames.contains("media")){
+        const media=req.result.createObjectStore("media",{keyPath:"id"});
+        media.createIndex("byUser","userId",{unique:false});
+        media.createIndex("byEntry",["userId","entryId"],{unique:false});
+      }
     };
     req.onsuccess=()=>{
       const instance=req.result;
@@ -276,13 +281,200 @@ export async function mutateEncryptedQueue<T>(
   try{return await job as T;}
   finally{if(pendingQueueWrites.get(userId)===job)pendingQueueWrites.delete(userId);}
 }
+// This store is separate from the article snapshot to avoid re-encrypting
+// the entire reader library for one downloaded image. Media is private to
+// this browser, never republished to GitHub Pages.
+const MAX_MEDIA_BYTES=48*1024*1024;
+const MAX_IMAGE_BYTES=5*1024*1024;
+const MAX_MEDIA_ITEMS=120;
+type MediaRow={
+  id:string;userId:string;entryId:string;position:number;
+  iv:Uint8Array<ArrayBuffer>;ciphertext:ArrayBuffer;
+  storedBytes:number;createdAt:number;
+};
+export type CachedImage={
+  id:string;url:string;mimeType:string;position:number;
+  bytes:number;blob:Blob;
+};
+function imageAad(userId:string,entryId:string){
+  return encoder.encode("kamdar-image-v1:"+userId+":"+entryId);
+}
+function validateImageUrl(raw:string){
+  if(raw.length>4096)throw Error("Adresa obrázku je příliš dlouhá.");
+  const url=new URL(raw);
+  if(url.protocol!=="https:"||url.username||url.password)
+    throw Error("Offline ukládání podporuje pouze HTTPS obrázky bez přihlašovacích údajů v URL.");
+  if(url.hostname==="localhost"||url.hostname.endsWith(".localhost")||
+     /^(?:127\.|10\.|192\.168\.|169\.254\.|0\.|::1$|\[)/.test(url.hostname))
+    throw Error("Místní síť není pro stahování médií povolena.");
+  return url.href;
+}
+function imageMime(contentType:string){
+  const mime=contentType.split(";")[0].trim().toLowerCase();
+  if(!["image/jpeg","image/png","image/webp","image/gif","image/avif"].includes(mime))
+    throw Error("Neplatný nebo nepodporovaný formát obrázku.");
+  return mime;
+}
+function isActualImage(data:Uint8Array,mime:string){
+  if(mime==="image/jpeg")
+    return data.length>=3&&data[0]===255&&data[1]===216&&data[2]===255;
+  if(mime==="image/png")
+    return data.length>=8&&[137,80,78,71,13,10,26,10].every((x,i)=>data[i]===x);
+  if(mime==="image/gif")
+    return data.length>=6&&decoder.decode(data.subarray(0,4))==="GIF8";
+  if(mime==="image/webp")
+    return data.length>=12&&decoder.decode(data.subarray(0,4))==="RIFF"&&
+      decoder.decode(data.subarray(8,12))==="WEBP";
+  if(mime==="image/avif")
+    return data.length>=12&&decoder.decode(data.subarray(4,8))==="ftyp"&&
+      ["avif","avis"].includes(decoder.decode(data.subarray(8,12)));
+  return false;
+}
+async function mediaRows(userId:string,entryId?:string):Promise<MediaRow[]>{
+  const instance=await db();
+  return new Promise((resolve,reject)=>{
+    const tx=instance.transaction("media","readonly");
+    const req=entryId?
+      tx.objectStore("media").index("byEntry").getAll([userId,entryId]):
+      tx.objectStore("media").index("byUser").getAll(userId);
+    req.onsuccess=()=>resolve(req.result as MediaRow[]);
+    req.onerror=()=>reject(req.error||Error("Mediální cache není dostupná."));
+  });
+}
+async function openImage(row:MediaRow,key:CryptoKey):Promise<CachedImage>{
+  const clear=new Uint8Array(await crypto.subtle.decrypt({
+    name:"AES-GCM",iv:row.iv,additionalData:imageAad(row.userId,row.entryId),tagLength:128
+  },key,row.ciphertext));
+  if(clear.length<5)throw Error("Poškozená mediální cache.");
+  const size=new DataView(clear.buffer,clear.byteOffset,4).getUint32(0);
+  if(size>4096||size+4>clear.byteLength)throw Error("Poškozená metadata obrázku.");
+  const meta=JSON.parse(decoder.decode(clear.subarray(4,4+size))) as {
+    url:string;mimeType:string;bytes:number
+  };
+  if(!meta||typeof meta.url!=="string"||!meta.mimeType||meta.bytes!==clear.length-4-size)
+    throw Error("Poškozená metadata obrázku.");
+  const data=clear.slice(4+size);
+  if(!isActualImage(data,meta.mimeType))throw Error("Neplatná data uloženého obrázku.");
+  return {id:row.id,url:meta.url,mimeType:meta.mimeType,
+    position:row.position,bytes:meta.bytes,blob:new Blob([data],{type:meta.mimeType})};
+}
+export async function cachedImages(userId:string,entryId:string):Promise<CachedImage[]>{
+  validateUserId(userId);validateUserId(entryId);
+  const key=unlockedKeys.get(userId);
+  if(!key)return [];
+  const rows=await mediaRows(userId,entryId);
+  const images=await Promise.all(rows.map(row=>openImage(row,key)));
+  return images.sort((a,b)=>a.position-b.position||a.id.localeCompare(b.id));
+}
+async function limitedImageFetch(url:string):Promise<{mimeType:string;bytes:ArrayBuffer}>{
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),20_000);
+  try{
+    const response=await fetch(url,{mode:"cors",credentials:"omit",
+      referrerPolicy:"no-referrer",redirect:"follow",cache:"no-store",
+      signal:controller.signal});
+    if(!response.ok||response.type==="opaque")
+      throw Error("Server obrázek nevydal. HTTP "+response.status);
+    validateImageUrl(response.url||url);
+    const mimeType=imageMime(response.headers.get("content-type")||"");
+    const claimed=Number(response.headers.get("content-length")||"0");
+    if(claimed>MAX_IMAGE_BYTES)throw Error("Obrázek přesahuje limit 5 MiB.");
+    const reader=response.body?.getReader();
+    if(!reader){
+      const bytes=await response.arrayBuffer();
+      if(bytes.byteLength>MAX_IMAGE_BYTES)throw Error("Obrázek přesahuje limit 5 MiB.");
+      if(!isActualImage(new Uint8Array(bytes),mimeType))throw Error("Soubor není validní obrázek.");
+      return {bytes,mimeType};
+    }
+    const chunks:Uint8Array[]=[];
+    let total=0;
+    for(;;){
+      const next=await reader.read();
+      if(next.done)break;
+      total+=next.value.length;
+      if(total>MAX_IMAGE_BYTES){await reader.cancel();throw Error("Obrázek přesahuje limit 5 MiB.");}
+      chunks.push(next.value);
+    }
+    const merged=new Uint8Array(total);
+    let offset=0;
+    for(const part of chunks){merged.set(part,offset);offset+=part.length;}
+    if(!isActualImage(merged,mimeType))throw Error("Soubor není validní obrázek.");
+    return {bytes:merged.buffer,mimeType};
+  }finally{clearTimeout(timeout);}
+}
+export async function cacheImage(
+  userId:string,entryId:string,url:string,position:number
+):Promise<{id:string;bytes:number}>{
+  validateUserId(userId);validateUserId(entryId);
+  const canonical=validateImageUrl(url);
+  if(!unlockedKeys.has(userId))throw Error("Nejdříve odemkni offline trezor.");
+  const downloaded=await limitedImageFetch(canonical);
+  const task=async()=>{
+    const key=unlockedKeys.get(userId);
+    if(!key)throw Error("Offline trezor byl mezitím zamčen.");
+    const existing=await mediaRows(userId);
+    const idBytes=await crypto.subtle.digest("SHA-256",
+      encoder.encode(userId+"\0"+entryId+"\0"+canonical));
+    const id=userId+":"+entryId+":"+Array.from(new Uint8Array(idBytes))
+      .map(b=>b.toString(16).padStart(2,"0")).join("");
+    const previous=existing.find(row=>row.id===id);
+    const previousSize=previous?.storedBytes||0;
+    if(existing.length>=MAX_MEDIA_ITEMS&&!previous)
+      throw Error("Mediální cache má limit 120 obrázků.");
+    const total=existing.reduce((sum,item)=>sum+item.storedBytes,0);
+    if(total-previousSize+downloaded.bytes.byteLength>MAX_MEDIA_BYTES)
+      throw Error("Mediální cache překročila 48 MiB. Smaž některé uložené obrázky.");
+    const meta=encoder.encode(JSON.stringify({
+      url:canonical,mimeType:downloaded.mimeType,bytes:downloaded.bytes.byteLength
+    }));
+    const data=new Uint8Array(downloaded.bytes);
+    const plain=new Uint8Array(4+meta.byteLength+data.byteLength);
+    new DataView(plain.buffer).setUint32(0,meta.byteLength);
+    plain.set(meta,4);plain.set(data,4+meta.byteLength);
+    const iv=crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext=await crypto.subtle.encrypt({
+      name:"AES-GCM",iv,additionalData:imageAad(userId,entryId),tagLength:128
+    },key,plain);
+    if(unlockedKeys.get(userId)!==key)throw Error("Offline trezor byl zamčen.");
+    const instance=await db();
+    const tx=instance.transaction(["vaults","media"],"readwrite");
+    const finished=done(tx);
+    const record=tx.objectStore("vaults").get(userId);
+    record.onsuccess=()=>{
+      if(!record.result||unlockedKeys.get(userId)!==key){tx.abort();return;}
+      tx.objectStore("media").put({
+        id,userId,entryId,position,iv,ciphertext,
+        storedBytes:downloaded.bytes.byteLength,createdAt:Date.now()
+      } satisfies MediaRow);
+    };
+    await finished;
+    return {id,bytes:downloaded.bytes.byteLength};
+  };
+  const locks=typeof navigator!=="undefined"?navigator.locks:undefined;
+  return locks?locks.request("kr-cache-image-"+userId,task):task();
+}
+export async function deleteCachedImage(userId:string,id:string):Promise<void>{
+  validateUserId(userId);
+  if(!unlockedKeys.has(userId))throw Error("Trezor musí být odemčen.");
+  if(!id.startsWith(userId+":"))throw Error("Obrázek patří jinému účtu.");
+  const instance=await db();
+  const tx=instance.transaction("media","readwrite");
+  const finished=done(tx);
+  tx.objectStore("media").delete(id);
+  await finished;
+}
 export async function deleteVault(userId:string):Promise<void>{
   validateUserId(userId);
   lockVault(userId);
   const instance=await db();
-  const tx=instance.transaction(["vaults","queues"],"readwrite");
+  const tx=instance.transaction(["vaults","queues","media"],"readwrite");
   const finished=done(tx);
   tx.objectStore("vaults").delete(userId);
   tx.objectStore("queues").delete(userId);
+  const cursor=tx.objectStore("media").index("byUser").openCursor(userId);
+  cursor.onsuccess=()=>{
+    const item=cursor.result;
+    if(item){item.delete();item.continue();}
+  };
   await finished;
 }
