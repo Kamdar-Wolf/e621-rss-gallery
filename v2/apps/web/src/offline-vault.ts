@@ -1,4 +1,5 @@
 import type {Entry,Feed,Stats} from "./api.js";
+import type {QueuedChange} from "./offline.js";
 
 export interface VaultSnapshot {
   userId:string;feeds:Feed[];entries:Entry[];stats:Stats;savedAt:number;
@@ -9,14 +10,19 @@ export interface VaultProfile {
 interface VaultRecord extends VaultProfile {
   salt:Uint8Array<ArrayBuffer>;iv:Uint8Array<ArrayBuffer>;ciphertext:ArrayBuffer;
 }
+interface QueueRecord {
+  userId:string;iv:Uint8Array<ArrayBuffer>;ciphertext:ArrayBuffer;updatedAt:number;
+}
 
 const DB_NAME="kamdar-reader-vault-v1";
+const DB_VERSION=2;
 const PBKDF2_ITERATIONS=350_000;
 const MAX_ENTRIES=500;
 const encoder=new TextEncoder();
 const decoder=new TextDecoder();
 const unlockedKeys=new Map<string,CryptoKey>();
 const pendingWrites=new Map<string,Promise<void>>();
+const pendingQueueWrites=new Map<string,Promise<unknown>>();
 let dbPromise:Promise<IDBDatabase>|null=null;
 
 function validateUserId(value:string){
@@ -42,10 +48,12 @@ function db():Promise<IDBDatabase>{
   if(dbPromise)return dbPromise;
   const opened=new Promise<IDBDatabase>((resolve,reject)=>{
     if(typeof indexedDB==="undefined"){reject(Error("Prohlížeč nepodporuje IndexedDB"));return;}
-    const req=indexedDB.open(DB_NAME,1);
+    const req=indexedDB.open(DB_NAME,DB_VERSION);
     req.onupgradeneeded=()=>{
       if(!req.result.objectStoreNames.contains("vaults"))
         req.result.createObjectStore("vaults",{keyPath:"userId"});
+      if(!req.result.objectStoreNames.contains("queues"))
+        req.result.createObjectStore("queues",{keyPath:"userId"});
     };
     req.onsuccess=()=>{
       const instance=req.result;
@@ -77,6 +85,7 @@ async function derive(passphrase:string,salt:Uint8Array<ArrayBuffer>):Promise<Cr
     {name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
 }
 function aad(userId:string){return encoder.encode("kamdar-vault-v1:"+userId);}
+function queueAad(userId:string){return encoder.encode("kamdar-queue-v1:"+userId);}
 async function encrypt(userId:string,content:VaultSnapshot,key:CryptoKey):Promise<{
   iv:Uint8Array<ArrayBuffer>;ciphertext:ArrayBuffer;
 }>{
@@ -196,12 +205,84 @@ export async function saveVaultSnapshot(
   try{await next;}
   finally{if(pendingWrites.get(userId)===next)pendingWrites.delete(userId);}
 }
+async function queueRecord(userId:string):Promise<QueueRecord|null>{
+  const instance=await db();
+  return new Promise((resolve,reject)=>{
+    const tx=instance.transaction("queues","readonly");
+    const request=tx.objectStore("queues").get(userId);
+    request.onsuccess=()=>resolve((request.result as QueueRecord|undefined)||null);
+    request.onerror=()=>reject(request.error||Error("Šifrovanou frontu nelze načíst."));
+  });
+}
+async function decryptQueue(row:QueueRecord,key:CryptoKey):Promise<QueuedChange[]>{
+  const buffer=await crypto.subtle.decrypt({
+    name:"AES-GCM",iv:row.iv,additionalData:queueAad(row.userId),tagLength:128
+  },key,row.ciphertext);
+  const parsed:unknown=JSON.parse(decoder.decode(buffer));
+  if(!Array.isArray(parsed)||parsed.length>1500)throw Error("Neplatná zašifrovaná fronta.");
+  for(const item of parsed){
+    if(!item||typeof item!=="object"||!("userId" in item)||
+      item.userId!==row.userId||!("id" in item)||typeof item.id!=="string")
+      throw Error("Záznam fronty neodpovídá účtu.");
+  }
+  return parsed as QueuedChange[];
+}
+export async function getEncryptedQueue(userId:string):Promise<QueuedChange[]>{
+  validateUserId(userId);
+  const key=unlockedKeys.get(userId);
+  if(!key)return [];
+  const row=await queueRecord(userId);
+  return row?decryptQueue(row,key):[];
+}
+/** Serializes read/decrypt/modify/encrypt for this user; cross-tab lock where supported. */
+export async function mutateEncryptedQueue<T>(
+  userId:string,
+  apply:(items:QueuedChange[])=>{items:QueuedChange[];result:T}
+):Promise<T>{
+  validateUserId(userId);
+  const previous=pendingQueueWrites.get(userId)||Promise.resolve();
+  const job=previous.catch(()=>{}).then(async()=>{
+    const key=unlockedKeys.get(userId);
+    if(!key)throw Error("Nejdříve odemkni offline trezor.");
+    const perform=async():Promise<T>=>{
+      const prior=await queueRecord(userId);
+      const current=prior?await decryptQueue(prior,key):[];
+      const changed=apply(current);
+      if(changed.items.length>1500)throw Error("Offline fronta má limit 1500 změn.");
+      if(unlockedKeys.get(userId)!==key)throw Error("Offline trezor byl mezitím zamčen.");
+      const iv=crypto.getRandomValues(new Uint8Array(12));
+      const ciphertext=await crypto.subtle.encrypt({
+        name:"AES-GCM",iv,additionalData:queueAad(userId),tagLength:128
+      },key,encoder.encode(JSON.stringify(changed.items)));
+      if(unlockedKeys.get(userId)!==key)throw Error("Offline trezor byl mezitím zamčen.");
+      const instance=await db();
+      const tx=instance.transaction(["queues","vaults"],"readwrite");
+      const finished=done(tx);
+      const vault=tx.objectStore("vaults").get(userId);
+      vault.onsuccess=()=>{
+        if(!vault.result || unlockedKeys.get(userId)!==key){
+          tx.abort();
+          return;
+        }
+        tx.objectStore("queues").put({userId,iv,ciphertext,updatedAt:Date.now()} satisfies QueueRecord);
+      };
+      await finished;
+      return changed.result;
+    };
+    const locks=typeof navigator!=="undefined"?navigator.locks:undefined;
+    return locks?locks.request("kr-vault-queue-"+userId,perform):perform();
+  });
+  pendingQueueWrites.set(userId,job);
+  try{return await job as T;}
+  finally{if(pendingQueueWrites.get(userId)===job)pendingQueueWrites.delete(userId);}
+}
 export async function deleteVault(userId:string):Promise<void>{
   validateUserId(userId);
   lockVault(userId);
   const instance=await db();
-  const tx=instance.transaction("vaults","readwrite");
+  const tx=instance.transaction(["vaults","queues"],"readwrite");
   const finished=done(tx);
   tx.objectStore("vaults").delete(userId);
+  tx.objectStore("queues").delete(userId);
   await finished;
 }
