@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {randomUUID} from "node:crypto";
 import {createClient} from "redis";
-import {createRedisImageDownloadQuota,
+import {createRedisImageDownloadQuota,createRedisLoginAttemptQuota,
   type RedisScriptClient} from "../../apps/api/src/distributed-quota.js";
 import {MediaDownloadError} from "../../apps/api/src/media-download.js";
 
@@ -54,4 +54,31 @@ test("distributed limiter fails closed when Redis is down or returns invalid res
     error instanceof MediaDownloadError&&error.status===503);
   await assert.rejects(quota.reserve("not-a-user"),error=>
     error instanceof MediaDownloadError&&error.status===403);
+});
+
+test("distributed login attempts stay limited across two replicas",{
+  skip:!redisUrl?"REDIS_URL not configured":false
+},async()=>{
+  const a=createClient({url:redisUrl!}),b=createClient({url:redisUrl!});
+  a.on("error",()=>{});b.on("error",()=>{});
+  await Promise.all([a.connect(),b.connect()]);
+  try{
+    const quotaA=createRedisLoginAttemptQuota(a as unknown as RedisScriptClient);
+    const quotaB=createRedisLoginAttemptQuota(b as unknown as RedisScriptClient);
+    const ip="203.0.113."+Math.floor(Math.random()*240+10);
+    for(let i=0;i<10;i++)
+      assert.equal(await (i%2?quotaA:quotaB).allow(ip),true);
+    assert.equal(await quotaB.allow(ip),false);
+    assert.equal(await quotaA.allow("198.51.100.101"),true);
+    const leaked=await a.keys("*"+ip+"*");
+    assert.deepEqual(leaked,[],"Raw IP address must never be in Redis key names");
+  }finally{
+    await Promise.all([a.quit(),b.quit()]);
+  }
+});
+test("distributed login quota fails closed when Redis is unavailable",async()=>{
+  const broken=createRedisLoginAttemptQuota({eval:async()=>{throw Error("offline");}});
+  await assert.rejects(broken.allow("198.51.100.99"),/unavailable/);
+  const invalid=createRedisLoginAttemptQuota({eval:async()=>undefined});
+  await assert.rejects(invalid.allow("198.51.100.99"),/invalid/);
 });
