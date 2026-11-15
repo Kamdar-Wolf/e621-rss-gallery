@@ -41,3 +41,7 @@ Další podrobnosti a provozní omezení viz [AUTH.md](AUTH.md) a [SYNC.md](SYNC
 - `GET /v1/entries` a `GET /v1/search` vrací také `media_count`. Pole `thumbnail` nyní vybírá pouze obrázkové přílohy, takže video či audio nejsou zaměněny za obrázek.
 - **API nepřenáší binární soubory ani nefunguje jako obecný proxy server.** Online prohlížeč načítá veřejné soubory přímo ze zdrojové domény, pokud je poskytovatel povoluje. U nefunkčních obrázků nabízí otevření originální adresy.
 - Další technické a bezpečnostní podmínky viz [MEDIA.md](MEDIA.md).
+
+### Kontrolované stahování obrázků (vývojová verze)
+
+`GET /v1/entries/<entryId>/media/<mediaId>/download` vrací binární obrázek výhradně z obrazové přílohy daného příspěvku a RSS kanálu odebíraného přihlášeným uživatelem. Neexistující nebo nesouvisející identifikátor vrátí 404, bez přihlášení 401, při dosažení limitu 429. MIME typy JPEG/PNG/WebP/GIF/AVIF, maximálně 5 MiB. Odpověď má `Cache-Control: private, no-store` a `Content-Disposition: attachment`. Nepřijímá volnou URL v query ani body. Bezpečnostní podmínky viz [MEDIA.md](MEDIA.md).

@@ -99,6 +99,10 @@ Nová galerie v detailu příspěvku podporuje **až 32 obrázků, video a audio
 
 Pokud je otevřený místní trezor, můžeš u online obrázku stisknout **Uložit obrázek offline**. Obrázek se stáhne pouze na přímý pokyn, ověří se jeho formát a velikost a uloží do AES-GCM šifrované IndexedDB v tomto prohlížeči. Lze jej znovu otevřít po odemknutí trezoru i bez serveru.
 
-Limity první verze: **5 MiB na obrázek, 48 MiB celkem, maximálně 120 souborů na účet**. Podporovány jsou JPEG, PNG, WebP, GIF a AVIF přes HTTPS. Zdroj musí umožňovat načtení přes CORS; jinak aplikace obrázek neuloží a zobrazí informaci. Žádné obrázky se automaticky nestahují ani nepublikují do veřejného repozitáře. Jednotlivé uložené obrázky lze z galerie odstranit.
+Limity první verze: **5 MiB na obrázek, 48 MiB celkem, maximálně 120 souborů na účet**. Podporovány jsou JPEG, PNG, WebP, GIF a AVIF přes HTTPS. U příloh dostupných v API používá čtečka autorizované serverové stažení: CORS zdrojového webu proto není nutný. Stahování vyžaduje platný odběr RSS, veřejně dostupnou HTTPS adresu a povolený obrazový formát; přístup za přihlášením ani jiné ochrany zdroje neobchází. Žádné obrázky se automaticky nestahují ani nepublikují do veřejného repozitáře. Jednotlivé uložené obrázky lze z galerie odstranit.
 
 Podrobnosti, omezení a testy viz [MEDIA.md](docs/MEDIA.md).
+
+### Dávkové ukládání obrázků
+
+U příspěvků s více obrázky lze zvolit **Uložit všechny obrázky offline**. Operace postupuje po jednom obrázku, ukazuje počet uložených, přeskočených a chybových souborů a umožní další stahování zastavit. Platí stejné limity na soubor, účet a serverové požadavky. Nejde o automatické hromadné stahování RSS kanálů.
