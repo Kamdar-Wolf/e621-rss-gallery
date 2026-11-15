@@ -83,12 +83,12 @@ export function MediaGallery({entryId,title,preview,csrf,offline,userId,onError}
     if(!active||active.kind!=="image"||!canSave)return;
     setSaving(true);setCacheNotice("");
     try{
-      const result=await cacheImage(userId,entryId,active.url,active.position);
+      const result=await cacheImage(userId,entryId,active.url,active.position,active.id);
       setCacheNotice("Obrázek zašifrován: "+(result.bytes/1048576).toFixed(2)+" MiB.");
       setMediaRevision(value=>value+1);
     }catch(error){
-      setCacheNotice((error instanceof Error?error.message:"Uložení obrázku selhalo.")+
-        " Zdroj musí povolit CORS stažení.");
+      setCacheNotice(error instanceof Error?error.message:
+        "Obrázek se nepodařilo stáhnout a zašifrovat.");
     }finally{setSaving(false);}
   }
   async function removeCurrent(){
