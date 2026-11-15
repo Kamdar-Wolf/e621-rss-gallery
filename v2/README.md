@@ -10,7 +10,7 @@
 - Izolace odběrů a uživatelských stavů mezi účty.
 - První synchronizace stavu přečtení, oblíbených a uložených položek: API vrací změny a online klient je kontroluje přibližně každých 20 sekund. Při konfliktu revizí server neprovede tiché přepsání.
 
-**Dosud chybí:** dokončení synchronizace štítků/poznámek/nastavení, plnohodnotný offline archiv videí a audio souborů, vlastní bezpečný mediální proxy server, skutečné produkční účty s MFA, zabezpečený provoz na veřejné doméně a testy původních zdrojů na cílovém serveru.
+**Dosud chybí:** dokončení synchronizace štítků/poznámek/nastavení, plnohodnotný offline archiv videí a audio souborů, skutečné produkční účty s MFA, bezpečnostní audit a ověřený provoz na veřejné doméně a testy původních zdrojů na cílovém serveru.
 
 ## Spuštění na Windows – lokální vývoj
 
@@ -70,6 +70,7 @@ Před spuštěním administračního příkazu nastav `READER_BOOTSTRAP_USER` na
 - [RSS stahování a parser](docs/INGEST.md)
 - [API](docs/API.md)
 - [Grafický systém](design/UI-SPEC.md)
+- [Staging HTTPS a bezpečnostní omezení](docs/PRODUCTION.md)
 - [Celkový realizační plán](../ROADMAP_V2_CZ.md)
 
 ## Automatické testy
@@ -106,3 +107,7 @@ Podrobnosti, omezení a testy viz [MEDIA.md](docs/MEDIA.md).
 ### Dávkové ukládání obrázků
 
 U příspěvků s více obrázky lze zvolit **Uložit všechny obrázky offline**. Operace postupuje po jednom obrázku, ukazuje počet uložených, přeskočených a chybových souborů a umožní další stahování zastavit. Platí stejné limity na soubor, účet a serverové požadavky. Nejde o automatické hromadné stahování RSS kanálů.
+
+## Samostatná HTTPS staging konfigurace
+
+Soubor compose.production.yml spolu s Caddyfile poskytují HTTPS vstup, který odděluje web od interních databází a API. Redis sdílí limity přihlášení i stahování mezi více instancemi. **Nejde o bezpečnostně auditovanou produkci** – zbývá MFA, monitoring, zálohování a E2E na skutečných zařízeních. Podrobnosti: [PRODUCTION.md](docs/PRODUCTION.md).

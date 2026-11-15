@@ -8,7 +8,7 @@ This is still **an isolated development build**, not a publicly secured service.
 - Browser receives an HttpOnly, SameSite=Strict cookie; Secure is enabled when APP_ORIGIN is HTTPS.
 - CSRF protection for authenticated changes: strict Origin check + HMAC-based X-Kr-Csrf token.
 - No public registration. Bootstrap accounts on the machine running the API.
-- Login attempt throttling (10 failed attempts per 15 minutes per IP **per process**); production needs shared/distributed limits, account protections, MFA and monitoring.
+- Login throttling: local development retains per-process protection. With REDIS_URL, atomic Redis Lua scripts enforce 10 attempts per 15 minutes per source IP across instances; Redis outage rejects new logins. Production still requires MFA, monitoring and security review.
 - User-scoped queries for subscriptions, articles, searches, OPML, notes and entry states.
 - Browser uses same-origin /api proxy; no static credentials in the JS bundle.
 - Development bearer login remains available ONLY with ALLOW_DEV_TOKEN=true and NODE_ENV != production, for legacy CI integration tests; never enable it in an untrusted environment.
@@ -36,3 +36,7 @@ This is still **an isolated development build**, not a publicly secured service.
 - Changing the password via bootstrap revokes all active sessions of that account.
 - Revoked sessions remain in the DB until retention cleanup is implemented.
 - Password login is an interim milestone, not a claim of enterprise-grade identity readiness.
+
+## HTTPS staging
+
+The isolated compose.production.yml deploys Caddy with private Redis/PostgreSQL/API. Shared quotas fail closed if Redis is unavailable. READER_TRUST_PROXY=true is permitted only behind the trusted reverse proxy without public API ports. See [PRODUCTION.md](PRODUCTION.md).
