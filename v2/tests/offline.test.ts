@@ -295,6 +295,36 @@ test("image cache rejects spoofed content types and oversized responses",async()
       /HTTPS/);
   }finally{globalThis.fetch=original;}
 });
+test("browser image save calls only authorized same-origin media endpoint",async()=>{
+  const validPng=Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLTTAAAAABJRU5ErkJggg==",
+    "base64");
+  const original=globalThis.fetch;
+  const mediaId="00000000-0000-4000-8000-000000001234";
+  const source="https://images.example.org/cors-blocked.png";
+  let count=0;
+  globalThis.fetch=async(resource,init)=>{
+    count++;
+    assert.equal(String(resource),
+      "/api/v1/entries/"+other.id+"/media/"+mediaId+"/download");
+    assert.equal(init?.mode,"same-origin");
+    assert.equal(init?.credentials,"same-origin");
+    assert.equal(init?.redirect,"error");
+    return new Response(validPng,{
+      status:200,headers:{"Content-Type":"image/png",
+        "Content-Length":String(validPng.length)}
+    });
+  };
+  try{
+    const saved=await cacheImage(userB,other.id,source,1,mediaId);
+    assert.equal(count,1);
+    assert.equal(saved.bytes,validPng.length);
+    const savedItems=await cachedImages(userB,other.id);
+    assert.deepEqual(savedItems.map(item=>item.url),[source]);
+    assert.equal(savedItems[0].position,1);
+    await deleteCachedImage(userB,saved.id);
+  }finally{globalThis.fetch=original;}
+});
 test("per-user data are deleted without impacting another account",async()=>{
   await clearOfflineUser(userA);
   assert.equal(await getSnapshot(userA),null);
