@@ -1,6 +1,7 @@
 import {createHash,createHmac,randomBytes,randomUUID,scryptSync,timingSafeEqual} from "node:crypto";
 import type pg from "pg";
 import type {FastifyInstance,FastifyRequest} from "fastify";
+import type {LoginAttemptQuota} from "./distributed-quota.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -64,6 +65,7 @@ export type AuthConfig={
   allowDevToken?:boolean;
   devToken?:string;
   devOwnerId?:string;
+  loginQuota?:LoginAttemptQuota;
 };
 export function configureAuth(app:FastifyInstance,pool:pg.Pool,config:AuthConfig){
   if(config.sessionSecret.length<32||config.sessionSecret.includes("REPLACE_WITH_RANDOM"))
@@ -84,6 +86,17 @@ export function configureAuth(app:FastifyInstance,pool:pg.Pool,config:AuthConfig
   app.post("/v1/auth/login",async(req,reply)=>{
     if(req.headers.origin!==targetOrigin)
       return reply.code(403).send({error:"Origin rejected"});
+    if(config.loginQuota){
+      try{
+        if(!(await config.loginQuota.allow(req.ip))){
+          reply.header("Retry-After","900");
+          return reply.code(429).send({error:"Too many login attempts"});
+        }
+      }catch{
+        // No distributed quota => reject the login. No per-instance fallback.
+        return reply.code(503).send({error:"Authentication temporarily unavailable"});
+      }
+    }
     const body=req.body as {username?:unknown;password?:unknown}|null;
     const username=validateHandle(body?.username);
     const password=body?.password;
