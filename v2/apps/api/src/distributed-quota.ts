@@ -1,4 +1,4 @@
-import {randomUUID} from "node:crypto";
+import {createHash,randomUUID} from "node:crypto";
 import {MediaDownloadError} from "./media-download.js";
 
 /**
@@ -99,6 +99,38 @@ export function createLocalImageDownloadQuota(
     async reserve(userId:string){
       const release=reserve(userId);
       return async()=>{release();};
+    }
+  };
+}
+
+export interface LoginAttemptQuota{
+  allow(sourceIp:string):Promise<boolean>;
+}
+const LOGIN_SCRIPT=String.raw`
+local attempts=redis.call('INCR',KEYS[1])
+if attempts==1 then redis.call('PEXPIRE',KEYS[1],ARGV[1]) end
+if attempts>tonumber(ARGV[2]) then return 0 end
+return 1
+`;
+/** 10 login requests / 15 minutes / source IP, fleet-wide. */
+export function createRedisLoginAttemptQuota(client:RedisScriptClient):LoginAttemptQuota{
+  return {
+    async allow(sourceIp:string):Promise<boolean>{
+      if(!sourceIp||sourceIp.length>256)return false;
+      // Do not retain raw IP addresses in Redis keys.
+      const fingerprint=createHash("sha256").update(sourceIp).digest("hex");
+      const key="kr:{login-quota}:ip:"+fingerprint;
+      let result:unknown;
+      try{
+        result=await client.eval(LOGIN_SCRIPT,{
+          keys:[key],arguments:[String(WINDOW_MS),"10"]
+        });
+      }catch{
+        throw Error("Shared authentication quota unavailable");
+      }
+      if(result!==0&&result!==1)
+        throw Error("Shared authentication quota produced invalid result");
+      return result===1;
     }
   };
 }
