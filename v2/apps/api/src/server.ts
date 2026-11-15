@@ -12,19 +12,23 @@ import { parseOpml } from "../../worker/src/opml.js";
 import {createImageDownloadLimiter,downloadVerifiedImage,MediaDownloadError,
   type VerifiedImage} from "./media-download.js";
 import {createLocalImageDownloadQuota,createRedisImageDownloadQuota,
+  createRedisLoginAttemptQuota,type LoginAttemptQuota,
   type ImageDownloadQuota,type RedisScriptClient} from "./distributed-quota.js";
 
 export function buildApp(pool: pg.Pool, devToken?: string,
   imageDownloader:(url:string)=>Promise<VerifiedImage>=downloadVerifiedImage,
-  imageQuota:ImageDownloadQuota=createLocalImageDownloadQuota(createImageDownloadLimiter())
+  imageQuota:ImageDownloadQuota=createLocalImageDownloadQuota(createImageDownloadLimiter()),
+  loginQuota?:LoginAttemptQuota
 ) {
-  const app=Fastify({logger: true, bodyLimit: 256*1024, trustProxy: false});
+  const app=Fastify({logger: true, bodyLimit: 256*1024,
+    trustProxy:process.env.READER_TRUST_PROXY==="true"});
   configureAuth(app,pool,{
     sessionSecret:process.env.READER_SESSION_SECRET||"",
     origin:process.env.APP_ORIGIN||"http://127.0.0.1:5173",
     allowDevToken:process.env.ALLOW_DEV_TOKEN==="true",
     devToken,
-    devOwnerId:process.env.READER_OWNER_ID
+    devOwnerId:process.env.READER_OWNER_ID,
+    loginQuota
   });
   app.get("/health", async () => ({status:"ok",service:"kamdar-reader-api",version:"0.2.0-alpha.1"}));
   app.get("/ready", async (_req,reply) => {
@@ -376,7 +380,9 @@ async function main(){
   }
   const quota=redis?createRedisImageDownloadQuota(
     redis as unknown as RedisScriptClient):undefined;
-  const app=buildApp(pool,token,downloadVerifiedImage,quota);
+  const loginQuota=redis?createRedisLoginAttemptQuota(
+    redis as unknown as RedisScriptClient):undefined;
+  const app=buildApp(pool,token,downloadVerifiedImage,quota,loginQuota);
   if(redis)app.addHook("onClose",async()=>{await redis.quit();});
   const shutdown=async()=>{await app.close();await pool.end();};
   process.once("SIGINT",()=>{void shutdown();});
