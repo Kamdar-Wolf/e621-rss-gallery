@@ -8,9 +8,13 @@ import { connectPool } from "./db.js";
 import { configureAuth } from "./auth.js";
 import { importOpml, exportOpml } from "./opml-service.js";
 import { parseOpml } from "../../worker/src/opml.js";
+import {createImageDownloadLimiter,downloadVerifiedImage,MediaDownloadError,
+  type VerifiedImage} from "./media-download.js";
 
-export function buildApp(pool: pg.Pool, devToken?: string) {
+export function buildApp(pool: pg.Pool, devToken?: string,
+  imageDownloader:(url:string)=>Promise<VerifiedImage>=downloadVerifiedImage) {
   const app=Fastify({logger: true, bodyLimit: 256*1024, trustProxy: false});
+  const reserveImageDownload=createImageDownloadLimiter();
   configureAuth(app,pool,{
     sessionSecret:process.env.READER_SESSION_SECRET||"",
     origin:process.env.APP_ORIGIN||"http://127.0.0.1:5173",
@@ -216,6 +220,43 @@ export function buildApp(pool: pg.Pool, devToken?: string) {
       position:row.position,width:row.width,height:row.height
     }));
     return {entryId:id,items};
+  });
+
+  // Not an open proxy: never accept a URL from the HTTP client.
+  // Both UUIDs and the user's active subscription must match a DB media row.
+  app.get("/v1/entries/:entryId/media/:mediaId/download",async(req,reply)=>{
+    const {entryId,mediaId}=req.params as {entryId?:string;mediaId?:string};
+    if(!z.uuid().safeParse(entryId).success||!z.uuid().safeParse(mediaId).success)
+      return reply.code(400).send({error:"Invalid media identifiers"});
+    const {rows}=await pool.query<{source_url:string}>(
+      "SELECT m.source_url FROM entry_media m "+
+      "JOIN entries e ON e.id=m.entry_id "+
+      "JOIN subscriptions s ON s.feed_id=e.feed_id AND s.user_id=$3 "+
+      "WHERE m.id=$1 AND m.entry_id=$2 AND m.kind='image' LIMIT 1",
+      [mediaId,entryId,req.readerUserId!]
+    );
+    if(!rows.length)return reply.code(404).send({error:"Image not found"});
+    let release:()=>void;
+    try{release=reserveImageDownload(req.readerUserId!);}
+    catch(error){
+      const status=error instanceof MediaDownloadError?error.status:429;
+      reply.header("Retry-After","60");
+      return reply.code(status).send({error:"Download limit exceeded"});
+    }
+    try{
+      const image=await imageDownloader(rows[0].source_url);
+      reply.header("Cache-Control","private, no-store, max-age=0");
+      reply.header("X-Content-Type-Options","nosniff");
+      reply.header("Content-Security-Policy","default-src 'none'; sandbox");
+      reply.header("Content-Disposition",'attachment; filename="reader-image"');
+      reply.type(image.mimeType);
+      return reply.send(image.body);
+    }catch(error){
+      const status=error instanceof MediaDownloadError?error.status:502;
+      // Do not expose upstream URLs, DNS records, private hostnames or tokens.
+      return reply.code(status).send({error:status===429?
+        "Download limit exceeded":"Image download blocked or unavailable"});
+    }finally{release();}
   });
 
   const syncSchema=z.object({
