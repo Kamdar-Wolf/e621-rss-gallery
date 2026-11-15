@@ -1,0 +1,51 @@
+name: Kamdar Reader v2 - PostgreSQL backup and restore drill
+on:
+  push:
+    branches: ["dev/**"]
+    paths: ["v2/scripts/**", "v2/db/**", ".github/workflows/v2-backup-restore.yml"]
+  pull_request:
+    paths: ["v2/scripts/**", "v2/db/**", ".github/workflows/v2-backup-restore.yml"]
+permissions:
+  contents: read
+jobs:
+  backup-restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      READER_SESSION_SECRET: local_ci_only_session_secret_minimum_32_chars_abc
+      DATABASE_URL: postgresql://reader:reader_dev_only@127.0.0.1:5438/reader
+      READER_ENABLE_DEMO: "true"
+      READER_DEPLOYMENT: development
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Start isolated development PostgreSQL
+        run: |
+          docker compose up -d postgres
+          for i in $(seq 1 30); do
+            if docker compose exec -T postgres pg_isready -U reader -d reader; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - name: Migrate and insert synthetic data
+        run: |
+          npm run migrate
+          npm run demo:seed
+      - name: Backup using Docker without binary shell redirection
+        run: |
+          node scripts/backup-postgres.mjs --output-dir "$RUNNER_TEMP/reader-backups"
+      - name: Restore into throwaway database and inspect counts
+        run: |
+          DUMP="$(find "$RUNNER_TEMP/reader-backups" -maxdepth 1 -name '*.dump' -type f | head -n 1)"
+          test -n "$DUMP"
+          node scripts/restore-drill.mjs --file "$DUMP"
+      - name: Remove CI database stack
+        if: always()
+        run: docker compose down

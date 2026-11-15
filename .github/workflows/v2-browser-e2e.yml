@@ -1,0 +1,94 @@
+name: Kamdar Reader v2 - browser E2E
+on:
+  push:
+    branches: ["dev/**"]
+    paths: ["v2/**", ".github/workflows/v2-browser-e2e.yml"]
+  pull_request:
+    paths: ["v2/**", ".github/workflows/v2-browser-e2e.yml"]
+permissions:
+  contents: read
+jobs:
+  browsers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: reader
+          POSTGRES_USER: reader
+          POSTGRES_PASSWORD: browser_ci_password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U reader -d reader"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://reader:browser_ci_password@127.0.0.1:5432/reader
+      REDIS_URL: redis://127.0.0.1:6379
+      READER_SESSION_SECRET: browser_only_secret_long_enough_for_ci_123456789
+      APP_ORIGIN: http://127.0.0.1:5173
+      API_HOST: 127.0.0.1
+      API_PORT: "3100"
+      READER_DEPLOYMENT: development
+      READER_ENABLE_DEMO: "true"
+      E2E_PASSWORD: example-e2e-long-password-1234
+      READER_BOOTSTRAP_PASSWORD: example-e2e-long-password-1234
+      ALLOW_DEV_TOKEN: "false"
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Install Chromium and Firefox
+        run: npx playwright install --with-deps chromium firefox
+      - name: Database schema and demo user
+        run: |
+          npm run migrate
+          npm run bootstrap:user
+          npm run demo:seed
+      - name: Build production PWA shell
+        run: npm run build:web
+      - name: Start API and browser preview
+        run: |
+          npx tsx apps/api/src/server.ts > "$RUNNER_TEMP/reader-api.log" 2>&1 &
+          npx vite preview --config vite.config.ts --host 127.0.0.1 --port 5173 --strictPort > "$RUNNER_TEMP/reader-web.log" 2>&1 &
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:3100/health > /dev/null && curl -fsS http://127.0.0.1:5173/ > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/reader-api.log" "$RUNNER_TEMP/reader-web.log"
+          exit 1
+      - name: Browser scenarios (Chromium, Firefox, Android viewport, offline PWA)
+        run: npm run test:e2e
+      - name: Upload browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reader-v2-browser-diagnostics
+          path: |
+            v2/playwright-report/
+            v2/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Print server logs on failure
+        if: failure()
+        run: |
+          cat "$RUNNER_TEMP/reader-api.log" 2>/dev/null || true
+          cat "$RUNNER_TEMP/reader-web.log" 2>/dev/null || true

@@ -1,0 +1,5 @@
+ALTER TABLE feeds ADD COLUMN IF NOT EXISTS fetch_locked_until TIMESTAMPTZ;
+ALTER TABLE feeds ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ;
+ALTER TABLE feeds ADD COLUMN IF NOT EXISTS last_http_status INTEGER;
+ALTER TABLE feeds ADD COLUMN IF NOT EXISTS failure_count INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS feeds_due_idx ON feeds(next_poll_at,fetch_locked_until);
