@@ -114,6 +114,34 @@ async function singleRequest(target:{
     req.end();
   });
 }
+/** Coarse in-process abuse guard; clustered production deployments need a shared limiter. */
+export function createImageDownloadLimiter(now:()=>number=Date.now){
+  const users=new Map<string,{windowStart:number;requests:number;active:number}>();
+  let globalActive=0;
+  return function reserve(userId:string):()=>void{
+    const time=now();
+    let row=users.get(userId);
+    if(!row||time-row.windowStart>=15*60_000){
+      const active=row?.active||0;
+      row={windowStart:time,requests:0,active};
+      users.set(userId,row);
+    }
+    if(row.requests>=40||row.active>=2||globalActive>=8)
+      throw new MediaDownloadError("Image download rate limit exceeded",429);
+    row.requests++;row.active++;globalActive++;
+    if(users.size>10000){
+      for(const [id,value] of users)
+        if(value.active===0&&time-value.windowStart>=15*60_000)users.delete(id);
+    }
+    let released=false;
+    return ()=>{
+      if(released)return;
+      released=true;
+      row!.active--;globalActive--;
+    };
+  };
+}
+
 /** Only for URLs retrieved from the authorized entry_media table, never raw user input. */
 export async function downloadVerifiedImage(
   rawUrl:string,resolver:Resolver=defaultResolver,
