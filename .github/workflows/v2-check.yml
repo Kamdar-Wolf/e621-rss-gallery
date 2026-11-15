@@ -69,5 +69,15 @@ jobs:
           name: kamdar-reader-v2-web
           path: v2/dist-web
           retention-days: 3
-      - name: Docker image build
+      - name: Check isolated production HTTPS Compose config
+        run: |
+          docker compose --env-file .env.production.example -f compose.production.yml config --format json | node scripts/check-production-compose.mjs
+      - name: Validate Caddy reverse-proxy configuration
+        run: |
+          docker run --rm -e READER_DOMAIN=reader.example.org \
+            -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+      - name: Build production web image
+        run: docker build -t kamdar-reader-v2-web-ci -f Dockerfile.web .
+      - name: Docker API image build
         run: docker build -t kamdar-reader-v2-ci .
