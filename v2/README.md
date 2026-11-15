@@ -12,6 +12,10 @@
 
 **Dosud chybí:** dokončení synchronizace štítků/poznámek/nastavení, plnohodnotný offline archiv videí a audio souborů, skutečné produkční účty s MFA, bezpečnostní audit a ověřený provoz na veřejné doméně a testy původních zdrojů na cílovém serveru.
 
+## Rychlý přístup k uživatelským testům
+
+Pro vyzkoušení veřejné verze 0.1, instalaci vývojové 2.0 na Windows, test Androidu přes ADB, ověření PWA a kontrolu obnovy PostgreSQL použij [český uživatelský návod](docs/USER_TESTING_CZ.md). Verze 2.0 zatím není veřejně hostovaná. Automatické testy Chromium/Firefox a mobilního viewportu běží v odděleném workflow GitHub Actions.
+
 ## Spuštění na Windows – lokální vývoj
 
 Požadavky: Git, Docker Desktop, Node.js 22+, npm a PowerShell.
