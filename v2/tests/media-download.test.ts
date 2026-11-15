@@ -76,7 +76,7 @@ test("MIME, encoded content, file signature and size are strictly checked",async
   assert.equal(validateImageType("image/png;charset=utf-8"),"image/png");
   assert.throws(()=>validateImageType("image/svg+xml"),MediaDownloadError);
   assert.equal(hasImageSignature(png,"image/png"),true);
-  const checks=[
+  const checks:Array<{status:number;headers:Record<string,string>;body:Buffer}>=[
     {status:200,headers:{"content-type":"text/html"},body:Buffer.from("<html>")},
     {status:200,headers:{"content-type":"image/png"},body:Buffer.from("<script>")},
     {status:200,headers:{"content-type":"image/png","content-length":String(IMAGE_LIMIT+1)},body:png},
@@ -85,7 +85,7 @@ test("MIME, encoded content, file signature and size are strictly checked",async
   ];
   for(const sample of checks){
     await assert.rejects(downloadVerifiedImage("https://images.example.org/a.png",
-      publicResolver,async()=>sample as ReturnType<ImageTransport> extends Promise<infer R>?R:never));
+      publicResolver,async()=>sample));
   }
 });
 test("rate limits apply per user and globally and count attempted downloads",()=>{
