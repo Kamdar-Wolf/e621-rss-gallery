@@ -1,0 +1,52 @@
+{
+  "name": "kamdar-reader-desktop",
+  "version": "0.2.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "dist:win": "electron-builder --win portable nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "cz.kamdar.reader",
+    "productName": "Kamdar Reader",
+    "directories": {
+      "output": "../dist"
+    },
+    "files": [
+      "main.js",
+      "package.json",
+      {
+        "from": "../public",
+        "to": "public",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "asar": true
+  }
+}
