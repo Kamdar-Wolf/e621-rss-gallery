@@ -1,7 +1,8 @@
-import {useEffect,useMemo,useState} from "react";
+import {useEffect,useMemo,useRef,useState} from "react";
 import {api,type EntryMedia,type EntryMediaPage} from "./api.js";
 import {cacheImage,cachedImages,deleteCachedImage,isVaultUnlocked,
   type CachedImage} from "./offline-vault.js";
+import {saveImageGallery,type BatchProgress} from "./media-batch.js";
 
 export function safeMediaUrl(raw:string|null|undefined):string|null{
   if(!raw||raw.length>4096)return null;
@@ -42,6 +43,9 @@ export function MediaGallery({entryId,title,preview,csrf,offline,userId,onError}
   const [localMedia,setLocalMedia]=useState<EntryMedia[]>([]);
   const [mediaRevision,setMediaRevision]=useState(0);
   const [saving,setSaving]=useState(false);
+  const [batchRunning,setBatchRunning]=useState(false);
+  const [batchProgress,setBatchProgress]=useState<BatchProgress|null>(null);
+  const cancelBatch=useRef(false);
   const [cacheNotice,setCacheNotice]=useState("");
   useEffect(()=>{
     setItems([]);setCurrent(0);setZoom(false);setMagnified(false);setFailed([]);
@@ -75,6 +79,10 @@ export function MediaGallery({entryId,title,preview,csrf,offline,userId,onError}
     });
     return()=>{live=false;for(const url of urls)URL.revokeObjectURL(url);};
   },[entryId,userId,offline,mediaRevision]);
+  useEffect(()=>{
+    cancelBatch.current=false;
+    return()=>{cancelBatch.current=true;};
+  },[entryId]);
   const gallery=useMemo(()=>offline?localMedia:
     normalizedGallery(items,loading?null:preview),
     [offline,localMedia,items,loading,preview]);
@@ -90,6 +98,32 @@ export function MediaGallery({entryId,title,preview,csrf,offline,userId,onError}
       setCacheNotice(error instanceof Error?error.message:
         "Obrázek se nepodařilo stáhnout a zašifrovat.");
     }finally{setSaving(false);}
+  }
+  async function saveAllImages(){
+    if(!canSave||saving)return;
+    const photos=gallery.filter(item=>item.kind==="image");
+    if(photos.length<2)return;
+    if(!window.confirm(
+      "Uložit až "+photos.length+" obrázků z tohoto příspěvku do místního "+
+      "šifrovaného trezoru? Platí limity 5 MiB/soubor, 48 MiB celkem."))return;
+    cancelBatch.current=false;setBatchProgress(null);
+    setSaving(true);setBatchRunning(true);setCacheNotice("");
+    try{
+      const result=await saveImageGallery(
+        gallery,cachedRows.map(item=>item.url),
+        async item=>cacheImage(userId,entryId,item.url,item.position,item.id),
+        progress=>setBatchProgress(progress),()=>cancelBatch.current
+      );
+      setCacheNotice(
+        "Dávka: uloženo "+result.saved+", již uloženo "+result.skipped+
+        ", chyby "+result.failed+(result.cancelled?", zastaveno na žádost uživatele.":".")
+      );
+      setMediaRevision(value=>value+1);
+    }catch(error){
+      setCacheNotice(error instanceof Error?error.message:"Dávkové ukládání selhalo.");
+    }finally{
+      setBatchRunning(false);setSaving(false);
+    }
   }
   async function removeCurrent(){
     if(!active||!userId||!isVaultUnlocked(userId))return;
@@ -168,6 +202,13 @@ export function MediaGallery({entryId,title,preview,csrf,offline,userId,onError}
       {canSave&&active.kind==="image"&&!cachedRows.some(image=>image.url===active.url)?
         <button type="button" disabled={saving} onClick={()=>void saveCurrent()}>
           {saving?"Ukládám…":"Uložit obrázek offline"}</button>:null}
+      {canSave&&gallery.filter(item=>item.kind==="image").length>1?
+        <button type="button" disabled={saving} onClick={()=>void saveAllImages()}>
+          Uložit všechny obrázky offline</button>:null}
+      {batchRunning?<button type="button" onClick={()=>{
+          cancelBatch.current=true;
+          setCacheNotice("Zastavuji po dokončení rozpracovaného obrázku…");
+        }}>Zastavit ukládání</button>:null}
       {active.kind==="image"&&(offline?
         cachedRows.some(image=>image.id===active.id):
         cachedRows.some(image=>image.url===active.url))?
@@ -176,6 +217,12 @@ export function MediaGallery({entryId,title,preview,csrf,offline,userId,onError}
       {active.kind==="image"&&available?<button type="button"
         onClick={()=>setZoom(true)}>Celá obrazovka</button>:null}
     </div>
+    {batchProgress?<p className="media-cache-notice" role="status">
+      Dávka {batchProgress.done}/{batchProgress.total} ·
+      uloženo {batchProgress.saved} ·
+      přeskočeno {batchProgress.skipped} ·
+      chyby {batchProgress.failed}
+    </p>:null}
     {cacheNotice?<p className="media-cache-notice" role="status">{cacheNotice}</p>:null}
     {gallery.length>1?<div className="media-strip" role="group" aria-label="Výběr přílohy">
       {gallery.map((item,i)=><button type="button" key={item.id+"-"+i}
