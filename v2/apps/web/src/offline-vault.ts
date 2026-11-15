@@ -366,16 +366,30 @@ export async function cachedImages(userId:string,entryId:string):Promise<CachedI
   const images=await Promise.all(rows.map(row=>openImage(row,key)));
   return images.sort((a,b)=>a.position-b.position||a.id.localeCompare(b.id));
 }
-async function limitedImageFetch(url:string):Promise<{mimeType:string;bytes:ArrayBuffer}>{
+async function limitedImageFetch(url:string,entryId?:string,mediaId?:string):
+  Promise<{mimeType:string;bytes:ArrayBuffer}>{
+  // Media IDs are DB-generated, never arbitrary remote URLs passed to a proxy.
+  const uuid=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+  const viaServer=Boolean(entryId&&mediaId&&uuid.test(entryId)&&uuid.test(mediaId));
+  const route=viaServer?
+    "/api/v1/entries/"+entryId+"/media/"+mediaId+"/download":url;
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),20_000);
   try{
-    const response=await fetch(url,{mode:"cors",credentials:"omit",
-      referrerPolicy:"no-referrer",redirect:"follow",cache:"no-store",
+    const response=await fetch(route,{
+      mode:viaServer?"same-origin":"cors",
+      credentials:viaServer?"same-origin":"omit",
+      referrerPolicy:"no-referrer",
+      redirect:viaServer?"error":"follow",cache:"no-store",
       signal:controller.signal});
     if(!response.ok||response.type==="opaque")
       throw Error("Server obrázek nevydal. HTTP "+response.status);
-    validateImageUrl(response.url||url);
+    if(viaServer){
+      // A server download must remain same-origin, including in browser redirects.
+      if(response.url&&typeof window!=="undefined"&&
+        new URL(response.url,window.location.href).origin!==window.location.origin)
+        throw Error("Serverové stahování přesměrovalo mimo vlastní doménu.");
+    }else validateImageUrl(response.url||url);
     const mimeType=imageMime(response.headers.get("content-type")||"");
     const claimed=Number(response.headers.get("content-length")||"0");
     if(claimed>MAX_IMAGE_BYTES)throw Error("Obrázek přesahuje limit 5 MiB.");
@@ -403,12 +417,12 @@ async function limitedImageFetch(url:string):Promise<{mimeType:string;bytes:Arra
   }finally{clearTimeout(timeout);}
 }
 export async function cacheImage(
-  userId:string,entryId:string,url:string,position:number
+  userId:string,entryId:string,url:string,position:number,mediaId?:string
 ):Promise<{id:string;bytes:number}>{
   validateUserId(userId);validateUserId(entryId);
   const canonical=validateImageUrl(url);
   if(!unlockedKeys.has(userId))throw Error("Nejdříve odemkni offline trezor.");
-  const downloaded=await limitedImageFetch(canonical);
+  const downloaded=await limitedImageFetch(canonical,entryId,mediaId);
   const task=async()=>{
     const key=unlockedKeys.get(userId);
     if(!key)throw Error("Offline trezor byl mezitím zamčen.");
