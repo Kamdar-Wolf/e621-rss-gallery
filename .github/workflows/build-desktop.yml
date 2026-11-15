@@ -1,0 +1,29 @@
+name: Build Kamdar Reader Windows EXE
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['desktop/**', '.github/workflows/build-desktop.yml', 'public/reader/**']
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Build executable
+        run: npm run dist:win
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kamdar-Reader-Windows
+          path: dist/*.exe
+          if-no-files-found: error
