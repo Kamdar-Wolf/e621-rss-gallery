@@ -26,5 +26,8 @@ self.addEventListener("fetch",event=>{
     return;
   }
   if(!PRECACHE.includes(url.pathname))return;
-  event.respondWith(caches.match(req).then(hit=>hit||fetch(req)));
+  // Vite/Caddy may set "Vary: Origin" on JS and CSS; the install cache was
+  // filled without the module request's Origin header. Restrict to the
+  // exact same-origin PRECACHE list, then ignore Vary for these immutable files.
+  event.respondWith(caches.match(req,{ignoreVary:true}).then(hit=>hit||fetch(req)));
 });
