@@ -10,6 +10,8 @@ const remote="/tmp/kr-restore-"+random+".dump";
 let created=false;
 try{
  docker("cp",file,container+":"+remote);
+ docker("exec",container,"chown","postgres:postgres",remote);
+ docker("exec",container,"chmod","0600",remote);
  docker("exec","-u","postgres",container,"pg_restore","-l",remote);
  docker("exec","-u","postgres",container,"createdb","-U","reader","-O","reader",database);
  created=true;
