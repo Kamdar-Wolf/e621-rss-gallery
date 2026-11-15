@@ -1,0 +1,118 @@
+# Standalone HTTPS deployment, intentionally separate from docker-compose.yml.
+# Only Caddy publishes ports. API, PostgreSQL and Redis remain private.
+name: kamdar-reader-prod
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: reader
+      POSTGRES_USER: reader
+      POSTGRES_PASSWORD: ${READER_DB_PASSWORD:?Set READER_DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [reader-private]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reader -d reader"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+  redis:
+    image: redis:7-alpine
+    # Ephemeral rate-limit counters; never expose Redis outside Docker.
+    command: ["redis-server", "--save", "", "--appendonly", "no",
+              "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    networks: [reader-private]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/scripts/migrate.js"]
+    environment:
+      DATABASE_URL: ${READER_DATABASE_URL:?Set READER_DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [reader-private]
+    restart: "no"
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/apps/api/src/server.js"]
+    environment:
+      DATABASE_URL: ${READER_DATABASE_URL:?Set READER_DATABASE_URL}
+      REDIS_URL: redis://redis:6379
+      READER_SESSION_SECRET: ${READER_SESSION_SECRET:?Set READER_SESSION_SECRET}
+      APP_ORIGIN: https://${READER_DOMAIN:?Set READER_DOMAIN}
+      READER_DEPLOYMENT: production
+      API_HOST: 0.0.0.0
+      API_PORT: 3100
+      NODE_ENV: production
+      ALLOW_DEV_TOKEN: "false"
+    expose: ["3100"]
+    networks: [reader-private]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/apps/worker/src/main.js"]
+    environment:
+      DATABASE_URL: ${READER_DATABASE_URL:?Set READER_DATABASE_URL}
+      NODE_ENV: production
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [reader-private]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    restart: unless-stopped
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    environment:
+      READER_DOMAIN: ${READER_DOMAIN:?Set READER_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [reader-private]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+volumes:
+  pgdata:
+  caddydata:
+  caddyconfig:
+networks:
+  reader-private:
+    driver: bridge
