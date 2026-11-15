@@ -25,6 +25,8 @@ export default defineConfig({
   server:{host:"127.0.0.1",port:5173,strictPort:true,
     proxy:{"/api":{target:"http://127.0.0.1:3100",
       changeOrigin:false,rewrite:(path)=>path.replace(/^\/api/,"")}}},
-  preview:{host:"127.0.0.1",port:4173},
+  preview:{host:"127.0.0.1",port:5173,strictPort:true,
+    proxy:{"/api":{target:"http://127.0.0.1:3100",
+      changeOrigin:false,rewrite:(path)=>path.replace(/^\/api/,"")}}},
   build:{outDir:"../../dist-web",emptyOutDir:true}
 });
