@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import {createClient} from "redis";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
@@ -10,11 +11,14 @@ import { importOpml, exportOpml } from "./opml-service.js";
 import { parseOpml } from "../../worker/src/opml.js";
 import {createImageDownloadLimiter,downloadVerifiedImage,MediaDownloadError,
   type VerifiedImage} from "./media-download.js";
+import {createLocalImageDownloadQuota,createRedisImageDownloadQuota,
+  type ImageDownloadQuota,type RedisScriptClient} from "./distributed-quota.js";
 
 export function buildApp(pool: pg.Pool, devToken?: string,
-  imageDownloader:(url:string)=>Promise<VerifiedImage>=downloadVerifiedImage) {
+  imageDownloader:(url:string)=>Promise<VerifiedImage>=downloadVerifiedImage,
+  imageQuota:ImageDownloadQuota=createLocalImageDownloadQuota(createImageDownloadLimiter())
+) {
   const app=Fastify({logger: true, bodyLimit: 256*1024, trustProxy: false});
-  const reserveImageDownload=createImageDownloadLimiter();
   configureAuth(app,pool,{
     sessionSecret:process.env.READER_SESSION_SECRET||"",
     origin:process.env.APP_ORIGIN||"http://127.0.0.1:5173",
@@ -236,12 +240,13 @@ export function buildApp(pool: pg.Pool, devToken?: string,
       [mediaId,entryId,req.readerUserId!]
     );
     if(!rows.length)return reply.code(404).send({error:"Image not found"});
-    let release:()=>void;
-    try{release=reserveImageDownload(req.readerUserId!);}
+    let release:()=>Promise<void>;
+    try{release=await imageQuota.reserve(req.readerUserId!);}
     catch(error){
-      const status=error instanceof MediaDownloadError?error.status:429;
-      reply.header("Retry-After","60");
-      return reply.code(status).send({error:"Download limit exceeded"});
+      const status=error instanceof MediaDownloadError?error.status:503;
+      if(status===429||status===503)reply.header("Retry-After","60");
+      return reply.code(status).send({error:status===429?
+        "Download limit exceeded":"Download quota service unavailable"});
     }
     try{
       const image=await imageDownloader(rows[0].source_url);
@@ -256,7 +261,7 @@ export function buildApp(pool: pg.Pool, devToken?: string,
       // Do not expose upstream URLs, DNS records, private hostnames or tokens.
       return reply.code(status).send({error:status===429?
         "Download limit exceeded":"Image download blocked or unavailable"});
-    }finally{release();}
+    }finally{await release();}
   });
 
   const syncSchema=z.object({
@@ -353,7 +358,26 @@ async function main(){
     throw Error("Set READER_SESSION_SECRET to a random value of at least 32 characters");
   if(!url)throw Error("DATABASE_URL is required");
   const pool=connectPool(url);
-  const app=buildApp(pool,token);
+  const deploying=process.env.READER_DEPLOYMENT==="production";
+  const origin=process.env.APP_ORIGIN||"";
+  if(deploying&&!origin.startsWith("https://"))
+    throw Error("Production APP_ORIGIN must use HTTPS");
+  if(deploying&&process.env.ALLOW_DEV_TOKEN==="true")
+    throw Error("Dev bearer tokens are forbidden in production");
+  if(deploying&&!process.env.REDIS_URL)
+    throw Error("Production download quota requires REDIS_URL");
+  const redisUrl=process.env.REDIS_URL;
+  const redis=redisUrl?createClient({url:redisUrl,
+    socket:{connectTimeout:5000,reconnectStrategy:retries=>
+      retries>5?new Error("Redis unavailable"):Math.min(1000*retries,5000)}}):null;
+  if(redis){
+    redis.on("error",error=>console.error("Redis connection error:",error.message));
+    await redis.connect();
+  }
+  const quota=redis?createRedisImageDownloadQuota(
+    redis as unknown as RedisScriptClient):undefined;
+  const app=buildApp(pool,token,downloadVerifiedImage,quota);
+  if(redis)app.addHook("onClose",async()=>{await redis.quit();});
   const shutdown=async()=>{await app.close();await pool.end();};
   process.once("SIGINT",()=>{void shutdown();});
   process.once("SIGTERM",()=>{void shutdown();});
