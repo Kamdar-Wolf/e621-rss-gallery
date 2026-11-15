@@ -13,6 +13,8 @@ for(const [name,service] of Object.entries(services)){
 const published=(services.web.ports||[]).map(x=>Number(x.published));
 if(!published.includes(80)||!published.includes(443))
   throw Error("Public HTTPS and ACME ports are required");
+if(services.api.environment.READER_TRUST_PROXY!=="true")
+  throw Error("Behind Caddy, trusted forwarding must be enabled for correct IP limits");
 if(services.api.environment.READER_DEPLOYMENT!=="production")
   throw Error("Production guard not enabled");
 if(services.api.environment.ALLOW_DEV_TOKEN!=="false")

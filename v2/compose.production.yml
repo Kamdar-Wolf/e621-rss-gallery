@@ -52,6 +52,7 @@ services:
       READER_SESSION_SECRET: ${READER_SESSION_SECRET:?Set READER_SESSION_SECRET}
       APP_ORIGIN: https://${READER_DOMAIN:?Set READER_DOMAIN}
       READER_DEPLOYMENT: production
+      READER_TRUST_PROXY: "true"
       API_HOST: 0.0.0.0
       API_PORT: 3100
       NODE_ENV: production
