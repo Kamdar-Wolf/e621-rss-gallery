@@ -24,7 +24,17 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 15
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping | grep -q PONG"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
     env:
+      REDIS_URL: redis://127.0.0.1:6379
       DATABASE_URL: postgresql://reader:ci_reader_password@127.0.0.1:5432/reader
       READER_API_TOKEN: test_only_random_very_long_token_123456789123
       ALLOW_DEV_TOKEN: 'true'

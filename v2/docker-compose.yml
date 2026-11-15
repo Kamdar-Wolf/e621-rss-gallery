@@ -50,11 +50,15 @@ services:
       APP_ORIGIN: http://127.0.0.1:5173
       API_HOST: 0.0.0.0
       API_PORT: 3100
+      READER_DEPLOYMENT: development
+      REDIS_URL: redis://redis:6379
     ports:
       - "127.0.0.1:3100:3100"
     depends_on:
       migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     restart: unless-stopped
   worker:
     build:
